@@ -101,6 +101,21 @@ index b6794c84..4cd59b15 100644
  	} else {
  		OSystem_POSIX::setFeatureState(f, enable);
  	}
+diff --git a/base/commandLine.cpp b/base/commandLine.cpp
+index c29d1eb0..f1b1e927 100644
+--- a/base/commandLine.cpp
++++ b/base/commandLine.cpp
+@@ -801,6 +801,10 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
+ 			DO_LONG_OPTION_BOOL("filtering")
+ 			END_OPTION
+ 
++			// The Big Red Adventure remaster: the launchers (app, web page) pass the Director's Cut switch
++			DO_LONG_OPTION_BOOL("bra-directors-cut")
++			END_OPTION
++
+ #ifdef USE_OPENGL
+ 			DO_LONG_OPTION("window-size")
+ 				Common::StringTokenizer tokenizer(option, ",");
 diff --git a/base/main.cpp b/base/main.cpp
 index ef3997f1..a7000a16 100644
 --- a/base/main.cpp
@@ -131,7 +146,7 @@ index ef3997f1..a7000a16 100644
  			if (result.getCode() == Common::kNoError && !g_system->getEventManager()->shouldReturnToLauncher() &&
  			    !g_system->hasFeature(OSystem::kFeatureNoQuit) && !ConfMan.getBool("gui_return_to_launcher_at_exit"))
 diff --git a/engines/dialogs.cpp b/engines/dialogs.cpp
-index 28690bd0..87934576 100644
+index 28690bd0..78036c8a 100644
 --- a/engines/dialogs.cpp
 +++ b/engines/dialogs.cpp
 @@ -45,8 +45,11 @@
@@ -148,7 +163,7 @@ index 28690bd0..87934576 100644
  	_backgroundType = GUI::ThemeEngine::kDialogBackgroundSpecial;
  
  #ifndef DISABLE_FANCY_THEMES
-@@ -66,32 +69,51 @@ MainMenuDialog::MainMenuDialog(Engine *engine)
+@@ -66,32 +69,54 @@ MainMenuDialog::MainMenuDialog(Engine *engine)
  	GUI::StaticTextWidget *version = new GUI::StaticTextWidget(this, "GlobalMenu.Version", Common::U32String(gScummVMFullVersion));
  	version->setAlign(Graphics::kTextAlignCenter);
  
@@ -156,12 +171,15 @@ index 28690bd0..87934576 100644
 +	// The Big Red Adventure edition: this ScummVM is a fork made for the game (its theme has the line)
 +	if (g_gui.theme()->getThemeId().hasPrefix("bra")) {
 +#ifdef USE_TRANSLATION
-+		bool it = TransMan.getCurrentLanguage().hasPrefix("it");
++		Common::String lang = TransMan.getCurrentLanguage();
 +#else
-+		bool it = false;
++		Common::String lang;
 +#endif
++		const char *forkText = lang.hasPrefix("it") ? "Fork per The Big Red Adventure"
++			: lang.hasPrefix("fr") ? "Fork pour The Big Red Adventure"
++			: lang.hasPrefix("de") ? "Fork f\xC3\xBCr The Big Red Adventure" : "Fork for The Big Red Adventure";
 +		GUI::StaticTextWidget *fork = new GUI::StaticTextWidget(this, "GlobalMenu.Fork",
-+			Common::U32String(it ? "Fork per The Big Red Adventure" : "Fork for The Big Red Adventure"),
++			Common::U32String(forkText, Common::kUtf8),
 +			Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
 +		fork->setAlign(Graphics::kTextAlignCenter);
 +	}
@@ -219,7 +237,7 @@ index 28690bd0..87934576 100644
  
  	_aboutDialog = new GUI::AboutDialog(true);
  	_loadDialog = new GUI::SaveLoadChooser(false);
-@@ -160,10 +182,12 @@ void MainMenuDialog::reflowLayout() {
+@@ -160,10 +185,12 @@ void MainMenuDialog::reflowLayout() {
  	// Update labels when it might be needed
  	// FIXME: it might be better to declare GUI::StaticTextWidget::setLabel() virtual
  	// and to reimplement it in GUI::ButtonWidget to handle the hotkey.
@@ -287,10 +305,10 @@ index a7f8f313..810e97a0 100644
  	 *
 diff --git a/engines/parallaction/autotest.cpp b/engines/parallaction/autotest.cpp
 new file mode 100644
-index 00000000..66106fa8
+index 00000000..93c79efe
 --- /dev/null
 +++ b/engines/parallaction/autotest.cpp
-@@ -0,0 +1,627 @@
+@@ -0,0 +1,720 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -322,6 +340,10 @@ index 00000000..66106fa8
 + *   rclick <x> <y>           right button down/up
 + *   key <char>               press a key (use F5 for the in-game menu)
 + *   shot <file.png>          dump the current screen
++ *   cursorshot <file.png> [<screen.png>]
++ *                            log the pointer set with the HD renderer (size, how it was made) and dump
++ *                            it (ARGB); with a second file also the screen with the pointer drawn at
++ *                            the mouse position (the backend draws the pointer, shot does not see it)
 + *   loc <location> <part>    jump to a location (BRA) / location (NS)
 + *   zones                    log the zones of the current location
 + *   framelog on|off          log every displayed frame (time, scroll, render cost)
@@ -338,6 +360,8 @@ index 00000000..66106fa8
 + *                            c:<x%>,<y%> click, rc:<x%>,<y%> right click,
 + *                            d:<x1%>,<y1%>,<x2%>,<y2%> drag, wh:<n> wheel (n > 0 down),
 + *                            k:left|right|pageup|pagedown|home|end|space|m
++ *   modal <step>...          run the same steps in the next window that opens by itself
++ *                            (the end titles, BRA): the times count from now
 + *   quit                     quit the engine
 + */
 +
@@ -357,6 +381,7 @@ index 00000000..66106fa8
 +#include "parallaction/parallaction.h"
 +#include "parallaction/hd.h"
 +#include "parallaction/input.h"
++#include "parallaction/inventory.h"
 +#include "parallaction/saveload.h"
 +
 +
@@ -425,6 +450,50 @@ index 00000000..66106fa8
 +			Image::writePNG(out, *screen);
 +	}
 +	_vm->_system->unlockScreen();
++}
++
++void AutoTest::cursorShot(const Common::String &file, const Common::String &screenFile) {
++	const Graphics::Surface &cur = _vm->_input->cursorCopy();
++	debug("AutoTest: cursor %dx%d %s visible %d", cur.w, cur.h, _vm->_input->cursorWhat().c_str(), CursorMan.isVisible() ? 1 : 0);
++	if (!cur.getPixels())
++		return;
++	Common::DumpFile out;
++	if (out.open(Common::Path(file, '/'), true))
++		Image::writePNG(out, cur);
++	out.close();
++	if (screenFile.empty())
++		return;
++	Graphics::Surface *screen = _vm->_system->lockScreen();
++	if (!screen || screen->format.bytesPerPixel == 1) {
++		if (screen)
++			_vm->_system->unlockScreen();
++		return;
++	}
++	Graphics::Surface comp;
++	comp.copyFrom(*screen);
++	_vm->_system->unlockScreen();
++	// the pointer at the mouse position (hot spot 0,0), blended with its alpha
++	Common::Point m = _vm->_system->getEventManager()->getMousePos();
++	for (int y = 0; y < cur.h; y++) {
++		if (m.y + y < 0 || m.y + y >= comp.h)
++			continue;
++		for (int x = 0; x < cur.w; x++) {
++			if (m.x + x < 0 || m.x + x >= comp.w)
++				continue;
++			uint32 c = *(const uint32 *)cur.getBasePtr(x, y), a = c >> 24;
++			if (!a)
++				continue;
++			byte r, g, b;
++			comp.format.colorToRGB(comp.getPixel(m.x + x, m.y + y), r, g, b);
++			r = (((c >> 16) & 0xff) * a + r * (255 - a)) / 255;
++			g = (((c >> 8) & 0xff) * a + g * (255 - a)) / 255;
++			b = ((c & 0xff) * a + b * (255 - a)) / 255;
++			comp.setPixel(m.x + x, m.y + y, comp.format.RGBToColor(r, g, b));
++		}
++	}
++	if (out.open(Common::Path(screenFile, '/'), true))
++		Image::writePNG(out, comp);
++	comp.free();
 +}
 +
 +/*
@@ -675,6 +744,8 @@ index 00000000..66106fa8
 +			return;
 +		} else if (c == "shot") {
 +			screenshot(a1);
++		} else if (c == "cursorshot") {
++			cursorShot(a1, a2);
 +		} else if ((c == "loc" || c == "ingame") &&
 +				((_vm->_input->_inputMode != Input::kInputModeGame && _vm->_input->_inputMode != Input::kInputModeMenu) ||
 +				 (g_engineFlags & kEngineChangeLocation))) {
@@ -781,6 +852,13 @@ index 00000000..66106fa8
 +			uint16 i = _vm->_globalFlagsNames->lookup(a1);
 +			if (i != Table::notFound)
 +				g_globalFlags |= 1u << (i - 1);
++		} else if (c == "lflag" && _vm->_localFlagNames) {
++			// a local flag of the current location (LOCALFLAGS of its script), as SET NAME there
++			uint16 i = _vm->_localFlagNames->lookup(a1);
++			if (i != Table::notFound)
++				_vm->setLocationFlags(1u << (i - 1));
++			else
++				warning("AutoTest: no local flag %s in %s", a1, _vm->_location._name);
 +		} else if (c == "flags" && _vm->_globalFlagsNames) {
 +			// global flags set (names from GLOBAL.TAB) and local flags of the current location
 +			Common::String names;
@@ -793,9 +871,17 @@ index 00000000..66106fa8
 +					local += Common::String(" ") + _vm->_localFlagNames->item(i);
 +			debug("AutoTest: flags global%s | local %s:%s", names.c_str(), _vm->_location._name, local.c_str());
 +		} else if (c == "item" && _vm->_objectsNames) {
++			// "item name": the current character; "item name dino|donna|doug": that character's inventory
 +			uint16 i = _vm->_objectsNames->lookup(a1);
-+			if (i != Table::notFound)
-+				_vm->addInventoryItem(4 + i);
++			if (i != Table::notFound) {
++				Inventory *inv = (a2[0] && _vm->getGameType() == GType_BRA) ? ((Parallaction_br *)_vm)->findInventory(a2) : nullptr;
++				if (inv) {
++					inv->addItem(4 + i);
++					((Parallaction_br *)_vm)->markTaken(4 + i);
++				} else {
++					_vm->addInventoryItem(4 + i);
++				}
++			}
 +		} else if (c == "dumpall") {
 +			// every sprite the location declares, shown or not yet (with hd_dump_sprites): animations, objects of
 +			// the zones, portraits of the characters to talk with, the current character; with this location's palette
@@ -869,8 +955,33 @@ index 00000000..66106fa8
 +			_vm->_system->getEventManager()->pushEvent(e);
 +			_wait = 5;
 +			return;
++		} else if (c == "modal" && !_manualScript) {
++			// steps for a window the game opens by itself (end titles): they run in whatever loop
++			// reads the events next, timed from now; the game goes on meanwhile
++			Common::Array<Common::String> steps;
++			for (uint i = 1; i < tok.size(); i++)
++				if (!tok[i].empty())
++					steps.push_back(tok[i]);
++			_manualScript = new GuiScript(steps);
++			_vm->_system->getEventManager()->getEventDispatcher()->registerObserver(_manualScript, Common::EventManager::kEventManPriority, false, true);
 +		} else if (c == "hintlog" && _vm->getGameType() == GType_BRA) {
 +			((Parallaction_br *)_vm)->logHint();
++		} else if (c == "flagparti" && _vm->getGameType() == GType_BRA) {
++			// flags remembered for later parts (loc/flag-parti.txt); "flagparti add 4:FLAG" adds one
++			Parallaction_br *br = (Parallaction_br *)_vm;
++			if (tok[1] == "add" && !tok[2].empty())
++				br->addPartFlag(tok[2]);
++			Common::String l;
++			for (uint i = 0; i < br->partFlags().size(); i++)
++				l += " " + br->partFlags()[i];
++			debug("AutoTest: flag-parti%s", l.c_str());
++		} else if (c == "cond" && _vm->getGameType() == GType_BRA) {
++			// a condition of the hints, evaluated now: "cond INV:dino:anello ZONA:camalb:numero"
++			Common::String cond;
++			for (uint i = 1; i < tok.size(); i++)
++				if (!tok[i].empty())
++					cond += (cond.empty() ? "" : " ") + tok[i];
++			debug("AutoTest: cond %s = %d", cond.c_str(), ((Parallaction_br *)_vm)->hintCondition(cond) ? 1 : 0);
 +		} else if (c == "quit") {
 +			_vm->quitGame();
 +			return;
@@ -1400,8 +1511,970 @@ index 5119138c..98522d1b 100644
  }
  
  
+diff --git a/engines/parallaction/credits.cpp b/engines/parallaction/credits.cpp
+new file mode 100644
+index 00000000..6b549c2e
+--- /dev/null
++++ b/engines/parallaction/credits.cpp
+@@ -0,0 +1,956 @@
++/* ScummVM - Graphic Adventure Engine
++ *
++ * ScummVM is the legal property of its developers, whose names
++ * are too numerous to list here. Please refer to the COPYRIGHT
++ * file distributed with this source distribution.
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ *
++ */
++
++/*
++ * Credits text of the game folder (BRA), shown scrolling over a background:
++ * - end titles: loc/titoli.txt says in which location of which part, how many seconds after
++ *   entering it, which text rolls, over which background and inside which box. The roll can be
++ *   skipped (Esc, click) and the game goes on where it was;
++ * - the game menu (Info): the same text in a window the player scrolls (crediti/<language>.txt).
++ * The text is <name>/<language>.txt (fallback it), UTF-8: "# comment", "---" new page, "== title",
++ * "= section", "Role: name", "> note", empty line = space. The engine knows no location, text or
++ * picture of its own. With the HD fonts (hd/fonts) and the remastered look the text uses them,
++ * otherwise the original bitmap fonts, scaled. Formats in docs/formati.md of the remaster project.
++ */
++
++#include "common/config-manager.h"
++#include "common/file.h"
++#include "common/fs.h"
++#include "common/str-array.h"
++#include "common/system.h"
++#include "common/tokenizer.h"
++#include "common/ustr.h"
++#include "graphics/font.h"
++#include "graphics/fontman.h"
++#include "graphics/managed_surface.h"
++#include "gui/dialog.h"
++#include "gui/gui-manager.h"
++#include "gui/ThemeEngine.h"
++#include "gui/widget.h"
++#include "image/jpeg.h"
++#include "image/png.h"
++
++#include "parallaction/parallaction.h"
++#include "parallaction/graphics.h"
++#include "parallaction/hd.h"
++#include "parallaction/input.h"
++
++namespace Parallaction {
++
++// R, G, B, A from the top byte down (as the manual)
++static const Graphics::PixelFormat kCreditsFormat(4, 8, 8, 8, 8, 24, 16, 8, 0);
++
++/* ---------------- files ---------------- */
++
++// a file of the game folder by a relative path, any case (the original folders are in capitals)
++static Common::SeekableReadStream *openGamePath(const Common::String &path) {
++	Common::FSNode node(ConfMan.getPath("path"));
++	Common::StringTokenizer tok(path, "/");
++	while (!tok.empty()) {
++		Common::String part = tok.nextToken();
++		Common::FSNode child = node.getChild(part);
++		if (!child.exists()) {
++			Common::FSList list;
++			if (node.getChildren(list, Common::FSNode::kListAll)) {
++				for (uint i = 0; i < list.size(); i++)
++					if (list[i].getName().equalsIgnoreCase(part)) {
++						child = list[i];
++						break;
++					}
++			}
++		}
++		if (!child.exists())
++			return SearchMan.createReadStreamForMember(Common::Path(path, '/'));
++		node = child;
++	}
++	return node.isDirectory() ? nullptr : node.createReadStream();
++}
++
++static const char *const kCreditsLangs[] = { "it", "fr", "en", "de" };
++
++// <name>/<language>.txt, German also as "ge" (the code of text/ and hint/); else English, else Italian. lang is
++// BRA's _langIndex (0 it, 1 fr, 2 en, 3 de), the same as getInternLanguage()
++static Common::SeekableReadStream *openCreditsText(const Common::String &name, uint lang, Common::String &found) {
++	Common::StringArray tries;
++	if (lang < ARRAYSIZE(kCreditsLangs))
++		tries.push_back(kCreditsLangs[lang]);
++	if (lang == 3)
++		tries.push_back("ge");
++	tries.push_back("en");
++	tries.push_back("it");
++	for (uint i = 0; i < tries.size(); i++) {
++		found = name + "/" + tries[i] + ".txt";
++		Common::SeekableReadStream *s = openGamePath(found);
++		if (s)
++			return s;
++	}
++	found.clear();
++	return nullptr;
++}
++
++/* ---------------- the text ---------------- */
++
++struct CreditsLine {
++	enum Kind { kTitle, kSection, kRole, kNote, kText, kSpace, kPage } kind;
++	Common::U32String a, b;		// text; role and name for kRole
++};
++
++static Common::Array<CreditsLine> parseCredits(Common::SeekableReadStream &f) {
++	Common::Array<CreditsLine> out;
++	while (!f.eos() && !f.err()) {
++		Common::String raw = f.readLine();
++		raw.trim();
++		if (raw.hasPrefix("#"))
++			continue;
++		CreditsLine l;
++		l.kind = CreditsLine::kText;
++		Common::String t = raw;
++		if (t.empty()) {
++			l.kind = CreditsLine::kSpace;
++		} else if (t == "---") {
++			l.kind = CreditsLine::kPage;
++		} else if (t.hasPrefix("== ")) {
++			l.kind = CreditsLine::kTitle;
++			t = t.substr(3);
++		} else if (t.hasPrefix("= ")) {
++			l.kind = CreditsLine::kSection;
++			t = t.substr(2);
++		} else if (t.hasPrefix("> ")) {
++			l.kind = CreditsLine::kNote;
++			t = t.substr(2);
++		} else {
++			// "Role: name" (as the launchers: a role shorter than 60 characters)
++			int colon = t.find(": ");
++			if (colon > 0 && colon < 60) {
++				l.kind = CreditsLine::kRole;
++				l.b = Common::U32String(t.substr(colon + 2).c_str(), Common::kUtf8);
++				t = t.substr(0, colon);
++			}
++		}
++		t.trim();
++		l.a = Common::U32String(t.c_str(), Common::kUtf8);
++		out.push_back(l);
++	}
++	// no empty lines at the ends
++	while (!out.empty() && (out.back().kind == CreditsLine::kSpace || out.back().kind == CreditsLine::kPage))
++		out.pop_back();
++	while (!out.empty() && (out[0].kind == CreditsLine::kSpace || out[0].kind == CreditsLine::kPage))
++		out.remove_at(0);
++	return out;
++}
++
++// capitals for the fake Cyrillic font (Latin-1 letters too: è -> È)
++static Common::U32String creditsUpper(const Common::U32String &s) {
++	Common::U32String u = s;
++	for (uint i = 0; i < u.size(); i++) {
++		uint32 c = u[i];
++		if (c < 128)
++			c = toupper(c);
++		else if (c >= 0xe0 && c <= 0xfe && c != 0xf7)
++			c -= 0x20;
++		u.setChar(c, i);
++	}
++	return u;
++}
++
++/* ---------------- faces ---------------- */
++
++// a font at a size, drawing coverage (fill, outline) into a line of overlay pixels
++class CreditsFace {
++public:
++	virtual ~CreditsFace() {}
++	virtual int height() const = 0;
++	virtual int width(const Common::String &s) const = 0;
++	// cov: w x height() pairs (fill, outline), x0 = pen position
++	virtual void draw(Common::Array<byte> &cov, int w, int x0, const Common::String &s) const = 0;
++	virtual bool caps() const { return false; }
++	virtual bool bitmap() const { return false; }
++};
++
++// an atlas of hd/fonts (3x the original font), resampled to the size asked
++class AtlasFace : public CreditsFace {
++	const HDRenderer::HDFont &_f;
++	int _num, _den;		// overlay pixels = atlas pixels * _num / _den
++	bool _caps;
++
++public:
++	AtlasFace(const HDRenderer::HDFont &f, int num, int den, bool caps) : _f(f), _num(num), _den(den), _caps(caps) {}
++	int height() const override { return (int)((int64)_f.line * _num / _den); }
++	int width(const Common::String &s) const override {
++		int w = 0;
++		for (uint i = 0; i < s.size(); i++)
++			w += _f.g[(byte)s[i]].adv;
++		return (int)((int64)w * _num / _den);
++	}
++	bool caps() const override { return _caps; }
++
++	void draw(Common::Array<byte> &cov, int w, int x0, const Common::String &s) const override {
++		const int h = height();
++		int pen = 0;	// atlas units
++		for (uint i = 0; i < s.size(); i++) {
++			const HDRenderer::HDFont::Glyph &g = _f.g[(byte)s[i]];
++			if (g.w && g.h) {
++				int gx0 = x0 + (int)((int64)(pen + g.bx) * _num / _den);
++				int gy0 = (int)((int64)g.by * _num / _den);
++				int gw = (int)((int64)g.w * _num / _den) + 2, gh = (int)((int64)g.h * _num / _den) + 2;
++				for (int y = MAX(0, gy0); y < MIN(h, gy0 + gh); y++) {
++					// atlas coordinate (8 bit fraction) of the pixel centre
++					int ay = (int)(((int64)(y - gy0) * 2 + 1) * _den * 128 / _num) - 128;
++					int ay0 = ay >> 8, wy = ay & 255;
++					for (int x = MAX(0, gx0); x < MIN(w, gx0 + gw); x++) {
++						int ax = (int)(((int64)(x - gx0) * 2 + 1) * _den * 128 / _num) - 128;
++						int ax0 = ax >> 8, wx = ax & 255;
++						for (int c = 0; c < 2; c++) {
++#define AT(xx, yy) (((xx) >= 0 && (yy) >= 0 && (xx) < g.w && (yy) < g.h) ? _f.atlas[((g.ay + (yy)) * _f.aw + g.ax + (xx)) * 2 + c] : 0)
++							int v = ((AT(ax0, ay0) * (256 - wx) + AT(ax0 + 1, ay0) * wx) * (256 - wy) +
++									 (AT(ax0, ay0 + 1) * (256 - wx) + AT(ax0 + 1, ay0 + 1) * wx) * wy) >> 16;
++#undef AT
++							byte &d = cov[(y * w + x) * 2 + c];
++							d = MAX<int>(d, v);
++						}
++					}
++				}
++			}
++			pen += g.adv;
++		}
++	}
++};
++
++// an original bitmap font of the game, scaled by a whole factor; characters the font draws blank
++// ('/', '-', brackets...) come from ScummVM's GUI font
++class BitmapFace : public CreditsFace {
++	Font *_font;
++	int _k;
++	bool _caps;
++	const Graphics::Font *_gui;
++	int8 _blank[256];
++
++	void drawRaw(Graphics::Surface &s, int x, const char *str) const {
++		int hd = _font->_hdFont;
++		_font->_hdFont = -1;
++		_font->setColor(1);
++		_font->drawString(&s, x, 0, str);
++		_font->_hdFont = hd;
++	}
++
++	bool blank(byte c) {
++		if (_blank[c] < 0) {
++			char str[2] = { (char)c, 0 };
++			Graphics::Surface s;
++			s.create(_font->getStringWidth(str) + 4, _font->height(), Graphics::PixelFormat::createFormatCLUT8());
++			drawRaw(s, 0, str);
++			bool empty = true;
++			for (int i = 0; i < s.w * s.h && empty; i++)
++				empty = ((const byte *)s.getPixels())[i] == 0;
++			s.free();
++			_blank[c] = c != ' ' && empty;
++		}
++		return _blank[c] == 1;
++	}
++
++public:
++	BitmapFace(Font *font, int k, bool caps) : _font(font), _k(MAX(1, k)), _caps(caps) {
++		_gui = FontMan.getFontByUsage(Graphics::FontManager::kGUIFont);
++		memset(_blank, -1, sizeof(_blank));
++	}
++	bool caps() const override { return _caps; }
++	bool bitmap() const override { return true; }
++	int height() const override { return _font->height() * _k; }
++
++	int charWidth(byte c) const {
++		if (const_cast<BitmapFace *>(this)->blank(c) && _gui)
++			return _gui->getCharWidth(c) + 1;
++		char str[2] = { (char)c, 0 };
++		return _font->getStringWidth(str);
++	}
++	int width(const Common::String &s) const override {
++		int w = 0;
++		for (uint i = 0; i < s.size(); i++)
++			w += charWidth(s[i]);
++		return w * _k;
++	}
++
++	void draw(Common::Array<byte> &cov, int w, int x0, const Common::String &s) const override {
++		const int fh = _font->height();
++		Graphics::Surface line;
++		line.create(MAX(1, width(s) / _k + 8), fh, Graphics::PixelFormat::createFormatCLUT8());
++		int pen = 0;
++		for (uint i = 0; i < s.size(); i++) {
++			byte c = s[i];
++			if (const_cast<BitmapFace *>(this)->blank(c) && _gui) {
++				// the GUI font, as tall as it is, centred on the line
++				_gui->drawChar(&line, c, pen, MAX(0, (fh - _gui->getFontHeight()) / 2), 1);
++			} else {
++				char str[2] = { (char)c, 0 };
++				drawRaw(line, pen, str);
++			}
++			pen += charWidth(c);
++		}
++		const int h = height();
++		for (int y = 0; y < h; y++) {
++			const byte *src = (const byte *)line.getBasePtr(0, y / _k);
++			for (int x = MAX(0, x0); x < MIN(w, x0 + line.w * _k); x++)
++				if (src[(x - x0) / _k])
++					cov[(y * w + x) * 2] = 255;
++		}
++		line.free();
++	}
++};
++
++/* ---------------- the window ---------------- */
++
++class CreditsView : public GUI::Widget {
++public:
++	CreditsView(GUI::GuiObject *boss) : GUI::Widget(boss, 0, 0, 1, 1, false) {
++		setFlags(GUI::WIDGET_ENABLED);
++	}
++	Graphics::ManagedSurface _surf;
++
++	void drawWidget() override {
++		if (_surf.getPixels())
++			g_gui.theme()->drawManagedSurface(Common::Point(_x, _y), _surf, Graphics::ALPHA_OPAQUE);
++	}
++};
++
++struct CreditsLook {
++	Common::Array<CreditsLine> lines;
++	Common::String bgPart, bg;	// background: part number and name ("0", "cornice"), empty = black
++	Common::Rect box;			// in game pixels; empty = the whole picture with a margin
++	int speed = 20;				// game pixels per second
++	bool roll = true;			// end titles (skipped by a click, closed at the end); else the menu window
++};
++
++class CreditsDialog : public GUI::Dialog {
++public:
++	CreditsDialog(Parallaction_br *vm, const CreditsLook &look) : GUI::Dialog(0, 0, 16, 16), _vm(vm), _look(look) {
++		_backgroundType = GUI::ThemeEngine::kDialogBackgroundNone;
++		_view = new CreditsView(this);
++		layout();
++	}
++
++	~CreditsDialog() override {
++		freeFaces();
++		clearRows();
++	}
++
++	void reflowLayout() override {
++		GUI::Dialog::reflowLayout();
++		if (_W == (int)g_system->getOverlayWidth() && _H == (int)g_system->getOverlayHeight()) {
++			_x = _y = 0;
++			_w = _W;
++			_h = _H;
++			_view->resize(0, 0, _W, _H, false);
++			return;
++		}
++		// the same place in the text after a change of size
++		double at = _stripH > 0 ? _pos / _stripH : 0;
++		layout();
++		_pos = at * _stripH;
++		redraw();
++	}
++
++	void open() override {
++		GUI::Dialog::open();
++		_last = g_system->getMillis();
++		if (!_look.roll)
++			hold();		// the window starts still on the first page
++		redraw();
++	}
++
++	void handleTickle() override {
++		uint32 now = g_system->getMillis();
++		uint32 dt = MIN<uint32>(now - _last, 250);
++		_last = now;
++		if (now >= _holdUntil)
++			_pos += (double)dt * _speed / 1000.0;
++		if (_look.roll && _pos > _stripH + _em) {
++			debug("CREDITS: roll ended");
++			close();
++			return;
++		}
++		if (!_look.roll)
++			_pos = MIN(_pos, (double)maxPos());
++		if ((int)_pos != _drawnPos)
++			redraw();
++		GUI::Dialog::handleTickle();
++	}
++
++	void handleKeyDown(Common::KeyState state) override {
++		switch (state.keycode) {
++		case Common::KEYCODE_UP:
++		case Common::KEYCODE_KP8:
++			scrollBy(-_lineStep);
++			return;
++		case Common::KEYCODE_DOWN:
++		case Common::KEYCODE_KP2:
++			scrollBy(_lineStep);
++			return;
++		case Common::KEYCODE_PAGEUP:
++			scrollBy(-_box.height() * 9 / 10);
++			return;
++		case Common::KEYCODE_PAGEDOWN:
++			scrollBy(_box.height() * 9 / 10);
++			return;
++		case Common::KEYCODE_HOME:
++			scrollBy(-_stripH * 2);
++			return;
++		case Common::KEYCODE_END:
++			scrollBy(_stripH * 2);
++			return;
++		case Common::KEYCODE_ESCAPE:
++		case Common::KEYCODE_RETURN:
++		case Common::KEYCODE_KP_ENTER:
++		case Common::KEYCODE_SPACE:
++			debug("CREDITS: closed by a key at %d/%d", (int)_pos, _stripH);
++			close();
++			return;
++		default:
++			break;
++		}
++	}
++
++	void handleMouseDown(int x, int y, int button, int clickCount) override {
++		if (button != 1)
++			return;
++		_pressed = true;
++		_dragged = false;
++		_downY = y;
++		_downPos = _pos;
++	}
++
++	void handleMouseMoved(int x, int y, int button) override {
++		if (!_pressed)
++			return;
++		if (ABS(y - _downY) > _slop)
++			_dragged = true;
++		if (_dragged) {
++			_pos = clampPos(_downPos - (y - _downY));
++			hold();
++			redraw();
++		}
++	}
++
++	void handleMouseUp(int x, int y, int button, int clickCount) override {
++		bool click = button == 2 || (button == 1 && _pressed && !_dragged && ABS(y - _downY) <= _slop);
++		_pressed = false;
++		if (click) {
++			debug("CREDITS: closed by a click at %d/%d", (int)_pos, _stripH);
++			close();
++		}
++	}
++
++	void handleMouseWheel(int x, int y, int direction) override {
++		scrollBy(direction * _lineStep * 3);
++	}
++
++private:
++	Parallaction_br *_vm;
++	CreditsLook _look;
++	CreditsView *_view;
++	int _W = 0, _H = 0, _em = 10, _slop = 8;
++	Graphics::ManagedSurface _bg;		// the background fitted to the overlay
++	Common::Rect _box;					// overlay pixels
++	double _pos = 0;					// strip pixel at the top of the box
++	int _drawnPos = -1000000;
++	double _speed = 60;					// overlay pixels per second
++	uint32 _last = 0, _holdUntil = 0;
++	int _lineStep = 20;
++	bool _pressed = false, _dragged = false;
++	int _downY = 0;
++	double _downPos = 0;
++
++	enum { kFaceTitle, kFaceSection, kFaceRole, kFaceText, kFaceNote, kNumFaces };
++	CreditsFace *_faces[kNumFaces] = {};
++	bool _hdLook = false;
++
++	struct Row {
++		int face;
++		uint32 color;
++		Common::String text;	// code page 850, as the face draws it
++		int y, w;
++		Graphics::ManagedSurface *surf;	// drawn when it comes into view
++	};
++	Common::Array<Row> _rows;
++	int _stripH = 0;
++
++	void freeFaces() {
++		for (int i = 0; i < kNumFaces; i++) {
++			delete _faces[i];
++			_faces[i] = nullptr;
++		}
++	}
++
++	void clearRows() {
++		for (uint i = 0; i < _rows.size(); i++)
++			delete _rows[i].surf;
++		_rows.clear();
++	}
++
++	int maxPos() const { return _look.roll ? _stripH + _em : MAX(0, _stripH - _box.height() + _em * 2); }
++	double clampPos(double p) const { return CLIP<double>(p, _look.roll ? -_box.height() : -_em, maxPos()); }
++	void hold() { _holdUntil = g_system->getMillis() + 2500; }
++
++	void scrollBy(int d) {
++		_pos = clampPos(_pos + d);
++		hold();
++		redraw();
++	}
++
++	// the background picture: HD (wide when the screen is), else the original background, else none
++	Graphics::Surface *loadBackground(int &bandL, int &w, int &h) {
++		bandL = 0;
++		w = 640;
++		h = 400;
++		if (_look.bg.empty())
++			return nullptr;
++		Common::String part = "PART" + _look.bgPart;
++		if (_hdLook) {
++			bool wide = _W * 10 > _H * 17;
++			const char *const names[] = { "%s_w.jpg", "%s_w.png", "%s.jpg", "%s.png" };
++			for (int i = wide ? 0 : 2; i < 4; i++) {
++				Common::String file = "hd/" + part + "/bkg/" + Common::String::format(names[i], _look.bg.c_str());
++				Common::SeekableReadStream *s = openGamePath(file);
++				if (!s)
++					continue;
++				Image::PNGDecoder png;
++				Image::JPEGDecoder jpeg;
++				jpeg.setOutputPixelFormat(kCreditsFormat);
++				Image::ImageDecoder *dec = file.hasSuffix(".png") ? (Image::ImageDecoder *)&png : &jpeg;
++				Graphics::Surface *out = nullptr;
++				if (dec->loadStream(*s) && dec->getSurface()) {
++					out = dec->getSurface()->convertTo(kCreditsFormat, dec->getPalette().data(), dec->getPalette().size());
++					// a wide picture has 36 game pixels more on each side (docs: 16:9)
++					w = i < 2 ? 712 : 640;
++					bandL = i < 2 ? 36 : 0;
++				}
++				delete s;
++				if (out) {
++					debug("CREDITS: background %s", file.c_str());
++					return out;
++				}
++			}
++		}
++		// the original background (part folder, BKG)
++		Common::SeekableReadStream *s = openGamePath(part + "/bkg/" + _look.bg + ".bkg");
++		if (!s) {
++			warning("Credits: no background %s/%s", part.c_str(), _look.bg.c_str());
++			return nullptr;
++		}
++		s->skip(4);
++		uint bw = s->readUint32BE();
++		if (bw & 1)
++			bw++;
++		uint bh = s->readUint32BE();
++		s->skip(20);
++		byte rgb[768];
++		s->read(rgb, 768);
++		Common::Array<byte> px(bw * bh);
++		s->read(&px[0], px.size());
++		bool ok = !s->err() && bw > 0 && bh > 0;
++		delete s;
++		if (!ok)
++			return nullptr;
++		Graphics::Surface *out = new Graphics::Surface;
++		out->create(bw, bh, kCreditsFormat);
++		for (uint y = 0; y < bh; y++) {
++			uint32 *d = (uint32 *)out->getBasePtr(0, y);
++			for (uint x = 0; x < bw; x++) {
++				byte c = px[y * bw + x];
++				d[x] = kCreditsFormat.RGBToColor(rgb[c], rgb[c + 256], rgb[c + 512]);
++			}
++		}
++		w = bw;
++		h = bh;
++		debug("CREDITS: background %s/bkg/%s.bkg (original)", part.c_str(), _look.bg.c_str());
++		return out;
++	}
++
++	void makeFaces(double u) {
++		freeFaces();
++		HDRenderer *hd = _vm->_gfx ? _vm->_gfx->_hd : nullptr;
++		const HDRenderer::HDFont *comic = hd ? hd->hdFont(0) : nullptr;
++		const HDRenderer::HDFont *russia = hd ? hd->hdFont(1) : nullptr;
++		_hdLook = hd && !hdClassic() && comic && russia;
++		if (_hdLook) {
++			// atlas at 3x of the original fonts: u / 3 times the size in game pixels
++			int num = (int)(u * 1000);
++			_faces[kFaceTitle] = new AtlasFace(*russia, num * 16 / 10, 3000, true);
++			_faces[kFaceSection] = new AtlasFace(*russia, num * 11 / 10, 3000, true);
++			_faces[kFaceRole] = new AtlasFace(*comic, num * 85 / 100, 3000, false);
++			_faces[kFaceText] = new AtlasFace(*comic, num, 3000, false);
++			_faces[kFaceNote] = new AtlasFace(*comic, num * 8 / 10, 3000, false);
++		} else {
++			int k = MAX(1, (int)(u + 0.01));
++			_faces[kFaceTitle] = new BitmapFace(_vm->_menuFont, k, true);
++			_faces[kFaceSection] = new BitmapFace(_vm->_menuFont, k, true);
++			_faces[kFaceRole] = new BitmapFace(_vm->_dialogueFont, k, false);
++			_faces[kFaceText] = new BitmapFace(_vm->_dialogueFont, k, false);
++			_faces[kFaceNote] = new BitmapFace(_vm->_dialogueFont, k, false);
++		}
++	}
++
++	// a text in the code page of the fonts, wrapped to the box
++	void addRows(int face, uint32 color, const Common::U32String &text, int &y, int lineGap) {
++		CreditsFace *f = _faces[face];
++		Common::String t = (f->caps() ? creditsUpper(text) : text).encode(Common::kDos850);
++		if (f->bitmap())
++			t = Parallaction::bitmapFontSpelling(t, true);
++		const int maxW = _box.width() - 2 * _em;
++		while (!t.empty()) {
++			uint cut = t.size();
++			if (f->width(t) > maxW) {
++				// the longest start that fits, broken at a space
++				uint lastSpace = 0, i = 1;
++				for (; i <= t.size(); i++) {
++					if (i < t.size() && t[i] == ' ')
++						lastSpace = i;
++					if (f->width(t.substr(0, i)) > maxW)
++						break;
++				}
++				cut = lastSpace ? lastSpace : MAX<uint>(1, i - 1);
++			}
++			Row r;
++			r.face = face;
++			r.color = color;
++			r.text = t.substr(0, cut);
++			r.text.trim();
++			r.w = f->width(r.text);
++			r.y = y;
++			r.surf = nullptr;
++			_rows.push_back(r);
++			y += f->height() + lineGap;
++			t = cut < t.size() ? t.substr(cut) : Common::String();
++			t.trim();
++		}
++	}
++
++	void layout() {
++		_W = g_system->getOverlayWidth();
++		_H = g_system->getOverlayHeight();
++		_view->_surf.create(_W, _H, kCreditsFormat);
++		_w = _W;
++		_h = _H;
++		_x = _y = 0;
++		_view->resize(0, 0, _W, _H, false);
++
++		// first guess of the scale (game pixels -> overlay) for the choice of the faces
++		makeFaces(MIN(_W / 640.0, _H / 400.0));
++		int bandL, bw, bh;
++		Graphics::Surface *bg = loadBackground(bandL, bw, bh);
++		// the picture (or the game screen when there is none) fitted to the overlay
++		int pw = bg ? (bandL ? 712 : 640) : 640;
++		double u = MIN((double)_W / pw, (double)_H / 400);
++		if (!_hdLook)
++			u = MAX(1.0, floor(u + 0.01));	// the bitmap fonts at a whole factor, the picture with them
++		int dw = (int)(pw * u), dh = (int)(400 * u);
++		int ox = (_W - dw) / 2, oy = (_H - dh) / 2;
++		makeFaces(u);
++
++		_bg.create(_W, _H, kCreditsFormat);
++		_bg.fillRect(Common::Rect(_W, _H), kCreditsFormat.RGBToColor(0, 0, 0));
++		if (bg) {
++			// scaled to dw x dh: bilinear for the HD picture, pixels as they are for the original
++			for (int y = 0; y < dh; y++) {
++				if (oy + y < 0 || oy + y >= _H)
++					continue;
++				uint32 *d = (uint32 *)_bg.getBasePtr(0, oy + y);
++				double sy = (y + 0.5) * bg->h / dh - 0.5;
++				for (int x = 0; x < dw; x++) {
++					if (ox + x < 0 || ox + x >= _W)
++						continue;
++					double sx = (x + 0.5) * bg->w / dw - 0.5;
++					if (!_hdLook) {
++						int ix = CLIP((int)((x * (int64)bg->w) / dw), 0, (int)bg->w - 1);
++						int iy = CLIP((int)((y * (int64)bg->h) / dh), 0, (int)bg->h - 1);
++						d[ox + x] = *(const uint32 *)bg->getBasePtr(ix, iy);
++						continue;
++					}
++					int x0 = CLIP((int)floor(sx), 0, (int)bg->w - 1), y0 = CLIP((int)floor(sy), 0, (int)bg->h - 1);
++					int x1 = MIN(x0 + 1, (int)bg->w - 1), y1 = MIN(y0 + 1, (int)bg->h - 1);
++					int fx = CLIP((int)((sx - floor(sx)) * 256), 0, 256), fy = CLIP((int)((sy - floor(sy)) * 256), 0, 256);
++					uint32 p00 = *(const uint32 *)bg->getBasePtr(x0, y0), p10 = *(const uint32 *)bg->getBasePtr(x1, y0);
++					uint32 p01 = *(const uint32 *)bg->getBasePtr(x0, y1), p11 = *(const uint32 *)bg->getBasePtr(x1, y1);
++					uint32 o = 0;
++					for (int sh = 8; sh < 32; sh += 8) {
++						int a = ((p00 >> sh) & 255) * (256 - fx) + ((p10 >> sh) & 255) * fx;
++						int b = ((p01 >> sh) & 255) * (256 - fx) + ((p11 >> sh) & 255) * fx;
++						o |= (uint32)(((a * (256 - fy) + b * fy) >> 16) & 255) << sh;
++					}
++					d[ox + x] = o | 0xff;
++				}
++			}
++			bg->free();
++			delete bg;
++		}
++
++		// the box of the text, game pixels of the 640x400 screen -> overlay
++		Common::Rect box = _look.box;
++		if (box.isEmpty())
++			box = Common::Rect(40, 30, 600, 370);
++		_box = Common::Rect(ox + (int)((box.left + bandL) * u), oy + (int)(box.top * u),
++			ox + (int)((box.right + bandL) * u), oy + (int)(box.bottom * u));
++		_box.clip(Common::Rect(_W, _H));
++		_em = MAX(4, (int)(6 * u));
++		_slop = MAX(6, _em);
++		_speed = _look.speed * u;
++
++		// the rows of the text
++		clearRows();
++		const uint32 kTitle = 0xf3ece0, kSection = 0xe6282e, kRole = 0xf0b429, kText = 0xf3ece0, kNote = 0xc8b496;
++		int y = 0;
++		const int gap = MAX(1, (int)u);
++		bool pageStart = true;
++		for (uint i = 0; i < _look.lines.size(); i++) {
++			const CreditsLine &l = _look.lines[i];
++			switch (l.kind) {
++			case CreditsLine::kPage:
++				y += _box.height() / 2;
++				pageStart = true;
++				break;
++			case CreditsLine::kSpace:
++				y += _faces[kFaceText]->height() / 2;
++				break;
++			case CreditsLine::kTitle:
++				if (!pageStart)
++					y += _faces[kFaceTitle]->height();
++				addRows(kFaceTitle, kTitle, l.a, y, gap);
++				y += _faces[kFaceText]->height() / 2;
++				break;
++			case CreditsLine::kSection:
++				y += _faces[kFaceText]->height() * 3 / 4;
++				addRows(kFaceSection, kSection, l.a, y, gap);
++				y += gap * 2;
++				break;
++			case CreditsLine::kRole:
++				// role above, name below, as in the titles of a film
++				addRows(kFaceRole, kRole, l.a, y, gap);
++				addRows(kFaceText, kText, l.b, y, gap);
++				y += gap * 3;
++				break;
++			case CreditsLine::kNote:
++				addRows(kFaceNote, kNote, l.a, y, gap);
++				y += gap * 2;
++				break;
++			case CreditsLine::kText:
++				addRows(kFaceText, kText, l.a, y, gap);
++				y += gap * 2;
++				break;
++			}
++			if (l.kind != CreditsLine::kPage && l.kind != CreditsLine::kSpace)
++				pageStart = false;
++		}
++		_stripH = y;
++		_lineStep = _faces[kFaceText]->height() + gap;
++		_pos = _look.roll ? -_box.height() : -_em;
++		_drawnPos = -1000000;
++		debug("CREDITS: layout %s, overlay %dx%d, box %d,%d-%d,%d, %d rows, %d px, %d px/s", _hdLook ? "hd" : "bitmap",
++			_W, _H, _box.left, _box.top, _box.right, _box.bottom, _rows.size(), _stripH, (int)_speed);
++	}
++
++	Graphics::ManagedSurface *rowSurface(Row &r) {
++		if (r.surf)
++			return r.surf;
++		CreditsFace *f = _faces[r.face];
++		int w = MAX(1, r.w + 4), h = f->height();
++		Common::Array<byte> cov(w * h * 2, 0);
++		f->draw(cov, w, 2, r.text);
++		r.surf = new Graphics::ManagedSurface(w, h, kCreditsFormat);
++		const byte cr = r.color >> 16, cg = (r.color >> 8) & 255, cb = r.color & 255;
++		for (int y = 0; y < h; y++) {
++			uint32 *d = (uint32 *)r.surf->getBasePtr(0, y);
++			for (int x = 0; x < w; x++) {
++				int fill = cov[(y * w + x) * 2], line = cov[(y * w + x) * 2 + 1];
++				// fill over a dark outline: alpha = the union, colour = fill against black
++				int a = MAX(fill, line);
++				int k = a ? fill * 255 / a : 0;
++				d[x] = kCreditsFormat.ARGBToColor(a, cr * k / 255, cg * k / 255, cb * k / 255);
++			}
++		}
++		return r.surf;
++	}
++
++	void redraw() {
++		Graphics::ManagedSurface &s = _view->_surf;
++		s.blitFrom(_bg);
++		_drawnPos = (int)_pos;
++		const int fade = MAX(1, _box.height() / 10);
++		for (uint i = 0; i < _rows.size(); i++) {
++			Row &r = _rows[i];
++			int h = _faces[r.face]->height();
++			int top = _box.top + r.y - _drawnPos;
++			if (top + h <= _box.top || top >= _box.bottom) {
++				// out of view: let go of its picture
++				delete r.surf;
++				r.surf = nullptr;
++				continue;
++			}
++			Graphics::ManagedSurface *rs = rowSurface(r);
++			int left = _box.left + (_box.width() - rs->w) / 2;
++			for (int y = MAX(top, (int)_box.top); y < MIN(top + rs->h, (int)_box.bottom); y++) {
++				// fade in and out at the top and bottom of the box
++				int edge = MIN(y - _box.top, _box.bottom - 1 - y);
++				int fa = edge >= fade ? 256 : edge * 256 / fade;
++				const uint32 *src = (const uint32 *)rs->getBasePtr(0, y - top);
++				uint32 *d = (uint32 *)s.getBasePtr(0, y);
++				for (int x = MAX(left, (int)_box.left); x < MIN(left + rs->w, (int)_box.right); x++) {
++					uint32 p = src[x - left];
++					int a = (p & 255) * fa >> 8;
++					if (!a)
++						continue;
++					uint32 q = d[x];
++					uint32 o = 0xff;
++					for (int sh = 8; sh < 32; sh += 8)
++						o |= (uint32)((((p >> sh) & 255) * a + ((q >> sh) & 255) * (255 - a)) / 255) << sh;
++					d[x] = o;
++				}
++			}
++		}
++		_view->markAsDirty();
++		g_gui.scheduleTopDialogRedraw();
++	}
++};
++
++/* ---------------- the engine ---------------- */
++
++void Parallaction_br::loadCreditsRolls() {
++	_creditsRollsLoaded = true;
++	Common::File f;
++	if (!f.open(Common::Path("loc/titoli.txt", '/')))
++		return;
++	while (!f.eos() && !f.err()) {
++		Common::String line = f.readLine();
++		int hash = line.findFirstOf('#');
++		if (hash >= 0)
++			line = Common::String(line.c_str(), hash);
++		// <part> <location> <seconds> <text> [sfondo=<part>/<background>] [riquadro=x1,y1,x2,y2] [velocita=<px/s>]
++		Common::StringTokenizer tok(line, " \t");
++		Common::StringArray w;
++		while (!tok.empty())
++			w.push_back(tok.nextToken());
++		if (w.empty())
++			continue;
++		if (w.size() < 4 || !Common::isDigit(w[0][0]) || !Common::isDigit(w[2][0])) {
++			warning("loc/titoli.txt: bad line '%s'", line.c_str());
++			continue;
++		}
++		CreditsRoll r;
++		r.part = atoi(w[0].c_str());
++		r.location = w[1];
++		r.delayMs = (uint32)(atof(w[2].c_str()) * 1000);
++		r.text = w[3];
++		for (uint i = 4; i < w.size(); i++) {
++			int eq = w[i].findFirstOf('=');
++			Common::String key = eq > 0 ? Common::String(w[i].c_str(), eq) : w[i];
++			Common::String val = eq > 0 ? Common::String(w[i].c_str() + eq + 1) : Common::String();
++			int x1, y1, x2, y2;
++			if (key.equalsIgnoreCase("sfondo") || key.equalsIgnoreCase("background")) {
++				int slash = val.findFirstOf('/');
++				if (slash > 0) {
++					r.bgPart = val.substr(0, slash);
++					r.bg = val.substr(slash + 1);
++				} else {
++					warning("loc/titoli.txt: background '%s' is not <part>/<name>", val.c_str());
++				}
++			} else if ((key.equalsIgnoreCase("riquadro") || key.equalsIgnoreCase("box")) &&
++					sscanf(val.c_str(), "%d,%d,%d,%d", &x1, &y1, &x2, &y2) == 4 && x2 > x1 && y2 > y1) {
++				r.box = Common::Rect(x1, y1, x2, y2);
++			} else if (key.equalsIgnoreCase("velocita") || key.equalsIgnoreCase("speed")) {
++				r.speed = CLIP(atoi(val.c_str()), 1, 400);
++			} else {
++				warning("loc/titoli.txt: unknown field '%s'", w[i].c_str());
++			}
++		}
++		_creditsRolls.push_back(r);
++	}
++	debugC(1, kDebugParser, "%d credit rolls loaded", _creditsRolls.size());
++}
++
++const Parallaction_br::CreditsRoll *Parallaction_br::creditsRollFor(const Common::String &text) {
++	if (!_creditsRollsLoaded)
++		loadCreditsRolls();
++	for (uint i = 0; i < _creditsRolls.size(); i++)
++		if (_creditsRolls[i].text.equalsIgnoreCase(text))
++			return &_creditsRolls[i];
++	return nullptr;
++}
++
++void Parallaction_br::armCreditsRoll() {
++	if (!_creditsRollsLoaded)
++		loadCreditsRolls();
++	_creditsRollDue = -1;
++	for (uint i = 0; i < _creditsRolls.size(); i++) {
++		const CreditsRoll &r = _creditsRolls[i];
++		if (r.part == _part && !scumm_stricmp(r.location.c_str(), _location._name)) {
++			_creditsRollDue = i;
++			_creditsRollAt = _system->getMillis() + r.delayMs;
++			debug("CREDITS: %s/<language>.txt rolls in %u ms (part %d, %s)", r.text.c_str(), r.delayMs, _part, _location._name);
++			return;
++		}
++	}
++}
++
++void Parallaction_br::updateCreditsRoll() {
++	if (_creditsRollDue < 0 || (int32)(_system->getMillis() - _creditsRollAt) < 0 ||
++		_input->_inputMode != Input::kInputModeGame || (g_engineFlags & kEngineChangeLocation))
++		return;
++	const CreditsRoll r = _creditsRolls[_creditsRollDue];
++	_creditsRollDue = -1;	// once per visit
++	showCredits(r.text, &r);
++}
++
++bool Parallaction_br::hasCredits(const Common::String &text) {
++	Common::String found;
++	Common::SeekableReadStream *s = openCreditsText(text, _langIndex, found);
++	bool ok = s != nullptr;
++	delete s;
++	return ok;
++}
++
++void Parallaction_br::showCredits(const Common::String &text, const CreditsRoll *roll) {
++	Common::String found;
++	Common::SeekableReadStream *s = openCreditsText(text, _langIndex, found);
++	if (!s) {
++		warning("Credits: no %s/<language>.txt", text.c_str());
++		return;
++	}
++	CreditsLook look;
++	look.lines = parseCredits(*s);
++	delete s;
++	look.roll = roll != nullptr;
++	// the window of the menu takes the look of the roll of the same text, if there is one
++	if (!roll)
++		roll = creditsRollFor(text);
++	if (roll) {
++		look.bgPart = roll->bgPart;
++		look.bg = roll->bg;
++		look.box = roll->box;
++		look.speed = roll->speed;
++	}
++	debug("CREDITS: open %s (%s), %u lines", found.c_str(), look.roll ? "roll" : "window", look.lines.size());
++	CreditsDialog dlg(this, look);
++	// the end titles leave the music playing (no pause); from the menu the game is paused already
++	dlg.runModal();
++	debug("CREDITS: closed");
++	if (_input)
++		_input->setCursorFromScreen(_system->getEventManager()->getMousePos());
++}
++
++} // End of namespace Parallaction
 diff --git a/engines/parallaction/detection.cpp b/engines/parallaction/detection.cpp
-index 2ba8b71f..ec7f4284 100644
+index 2ba8b71f..b35f20df 100644
 --- a/engines/parallaction/detection.cpp
 +++ b/engines/parallaction/detection.cpp
 @@ -172,8 +172,8 @@ static const PARALLACTIONGameDescription gameDescriptions[] = {
@@ -1411,26 +2484,27 @@ index 2ba8b71f..ec7f4284 100644
 -			ADGF_UNSTABLE,
 -			GUIO2(GUIO_NOSPEECH, GAMEOPTION_TTS)
 +			ADGF_TESTING,
-+			GUIO4(GAMEOPTION_TTS, GAMEOPTION_HD_GRAPHICS, GAMEOPTION_HD_SPRITES, GAMEOPTION_UNLOCK_PARTS)
++			GUIO5(GAMEOPTION_TTS, GAMEOPTION_HD_GRAPHICS, GAMEOPTION_HD_SPRITES, GAMEOPTION_UNLOCK_PARTS, GAMEOPTION_DIRECTORS_CUT)
  		},
  		GType_BRA,
  		GF_LANG_EN | GF_LANG_FR | GF_LANG_DE | GF_LANG_IT | GF_LANG_MULT,
 diff --git a/engines/parallaction/detection.h b/engines/parallaction/detection.h
-index 25d3b3eb..fa158f95 100644
+index 25d3b3eb..52abdbc0 100644
 --- a/engines/parallaction/detection.h
 +++ b/engines/parallaction/detection.h
-@@ -50,6 +50,9 @@ struct PARALLACTIONGameDescription {
+@@ -50,6 +50,10 @@ struct PARALLACTIONGameDescription {
  };
  
  #define GAMEOPTION_TTS                    GUIO_GAMEOPTIONS1
 +#define GAMEOPTION_HD_GRAPHICS            GUIO_GAMEOPTIONS2
 +#define GAMEOPTION_UNLOCK_PARTS           GUIO_GAMEOPTIONS3
 +#define GAMEOPTION_HD_SPRITES             GUIO_GAMEOPTIONS4
++#define GAMEOPTION_DIRECTORS_CUT          GUIO_GAMEOPTIONS5
  
  } // End of namespace Parallaction
  
 diff --git a/engines/parallaction/dialogue.cpp b/engines/parallaction/dialogue.cpp
-index 9145254d..a917ff13 100644
+index 9145254d..e6d9f3f5 100644
 --- a/engines/parallaction/dialogue.cpp
 +++ b/engines/parallaction/dialogue.cpp
 @@ -22,6 +22,8 @@
@@ -1442,20 +2516,21 @@ index 9145254d..a917ff13 100644
  #include "parallaction/exec.h"
  #include "parallaction/input.h"
  #include "parallaction/parallaction.h"
-@@ -63,6 +65,12 @@ class DialogueManager {
+@@ -63,6 +65,13 @@ class DialogueManager {
  	GfxObj			*_answerer;
  	int				_faceId;
  
 +	// BRA: portraits corrected by the patch (text/dialoghi.txt), see Parallaction::dialogueFix()
 +	Common::HashMap<Common::String, GfxObj *, Common::IgnoreCase_Hash, Common::IgnoreCase_EqualTo> _fixTalks;
 +	GfxObj *portrait(const Common::String &text, GfxObj *talk, int &frame);
++	GfxObj *portraitFix(const Common::String &text, GfxObj *talk, int &frame);
 +	void setVoiceSpeaker(const Common::String &text, GfxObj *talk, int frame);
 +	void showAnswerFace(Answer *a);
 +
  	int 			_questionerVoiceID;
  	int 			_answererVoiceID;
  
-@@ -75,6 +83,10 @@ class DialogueManager {
+@@ -75,6 +84,10 @@ class DialogueManager {
  	uint32			_mouseButtons;
  	Common::Point	_mousePos;
  
@@ -1466,7 +2541,7 @@ index 9145254d..a917ff13 100644
  protected:
  	BalloonPositions	_ballonPos;
  	struct VisibleAnswer {
-@@ -175,10 +187,25 @@ DialogueManager::DialogueManager(Parallaction *vm, ZonePtr z) : _vm(vm), _z(z) {
+@@ -175,10 +188,25 @@ DialogueManager::DialogueManager(Parallaction *vm, ZonePtr z) : _vm(vm), _z(z) {
  	_downKey = 0;
  
  	_mouseButtons = 0;
@@ -1492,7 +2567,7 @@ index 9145254d..a917ff13 100644
  void DialogueManager::start() {
  	_vm->_gfx->hideFloatingLabel();
  	assert(_dialogue);
-@@ -189,9 +216,12 @@ void DialogueManager::start() {
+@@ -189,9 +217,12 @@ void DialogueManager::start() {
  
  
  DialogueManager::~DialogueManager() {
@@ -1505,7 +2580,7 @@ index 9145254d..a917ff13 100644
  	_z.reset();
  }
  
-@@ -208,6 +238,8 @@ void DialogueManager::transitionToState(DialogueState newState) {
+@@ -208,6 +239,8 @@ void DialogueManager::transitionToState(DialogueState newState) {
  	if (_state != newState) {
  		debugC(3, kDebugDialogue, "DialogueManager moved to state '%s'", dialogueStates[newState]);
  
@@ -1514,13 +2589,23 @@ index 9145254d..a917ff13 100644
  		if (DebugMan.isDebugChannelEnabled(kDebugDialogue) && gDebugLevel == 9) {
  			switch (newState) {
  				case RUN_QUESTION:
-@@ -227,6 +259,57 @@ void DialogueManager::transitionToState(DialogueState newState) {
+@@ -227,6 +260,67 @@ void DialogueManager::transitionToState(DialogueState newState) {
  	_state = newState;
  }
  
 +// The portrait for a line: the talk file and frame of the script, unless the patch corrects them
 +// (text/dialoghi.txt, keyed by the line's voice key). Without corrections nothing changes.
 +GfxObj *DialogueManager::portrait(const Common::String &text, GfxObj *talk, int &frame) {
++	GfxObj *obj = portraitFix(text, talk, frame);
++	// a frame the talk file does not have (a slip of the scripts) must not stop the game: the first one
++	if (obj && (frame < 0 || (uint)frame >= obj->getNum())) {
++		warning("dialogue: portrait frame %d out of range for '%s' (%u frames), using 0", frame, obj->getName(), obj->getNum());
++		frame = 0;
++	}
++	return obj;
++}
++
++GfxObj *DialogueManager::portraitFix(const Common::String &text, GfxObj *talk, int &frame) {
 +	const Parallaction::DialogueFix *fix = _vm->dialogueFix(text);
 +	if (!fix)
 +		return talk;
@@ -1572,7 +2657,7 @@ index 9145254d..a917ff13 100644
  bool DialogueManager::testAnswerFlags(Answer *a) {
  	uint32 flags = _vm->getLocationFlags();
  	if (a->_yesFlags & kFlagsGlobal)
-@@ -250,6 +333,7 @@ void DialogueManager::displayAnswers() {
+@@ -250,6 +344,7 @@ void DialogueManager::displayAnswers() {
  	int mood = 0;
  	if (_numVisAnswers == 1) {
  		mood = _visAnswers[0]._a->speakerMood();
@@ -1580,7 +2665,7 @@ index 9145254d..a917ff13 100644
  		_balloonMan->setBalloonText(_visAnswers[0]._balloon, _visAnswers[0]._a->_text, BalloonManager::kNormalColor);
  	} else
  	if (_numVisAnswers > 1) {
-@@ -259,7 +343,10 @@ void DialogueManager::displayAnswers() {
+@@ -259,7 +354,10 @@ void DialogueManager::displayAnswers() {
  	}
  
  	_faceId = _gfx->setItem(_answerer, _ballonPos._answerChar.x, _ballonPos._answerChar.y);
@@ -1592,7 +2677,7 @@ index 9145254d..a917ff13 100644
  }
  
  int16 DialogueManager::selectAnswer1() {
-@@ -287,7 +374,7 @@ int16 DialogueManager::selectAnswerN() {
+@@ -287,7 +385,7 @@ int16 DialogueManager::selectAnswerN() {
  		if (_selection != NO_ANSWER_SELECTED) {
  			VisibleAnswer *answer = &_visAnswers[_selection];
  			_balloonMan->setBalloonText(answer->_balloon, answer->_a->_text, BalloonManager::kSelectedColor);
@@ -1601,7 +2686,7 @@ index 9145254d..a917ff13 100644
  		}
  	}
  
-@@ -303,18 +390,22 @@ int16 DialogueManager::selectAnswerN() {
+@@ -303,18 +401,22 @@ int16 DialogueManager::selectAnswerN() {
  bool DialogueManager::displayQuestion() {
  	if (_q->textIsNull()) return false;
  
@@ -1627,7 +2712,7 @@ index 9145254d..a917ff13 100644
  
  	return true;
  }
-@@ -360,12 +451,22 @@ void DialogueManager::runAnswer() {
+@@ -360,12 +462,22 @@ void DialogueManager::runAnswer() {
  	_answerId = selectAnswer();
  	if (_answerId != NO_ANSWER_SELECTED) {
  		_cmdList = &_q->_answers[_answerId]->_commands;
@@ -1650,7 +2735,7 @@ index 9145254d..a917ff13 100644
  	_q = _dialogue->findQuestion(_q->_answers[_answerId]->_followingName);
  	if (_q == nullptr) {
  		transitionToState(DIALOGUE_OVER);
-@@ -561,6 +662,12 @@ void Parallaction::enterDialogueMode(ZonePtr z) {
+@@ -561,6 +673,12 @@ void Parallaction::enterDialogueMode(ZonePtr z) {
  		return;
  	}
  
@@ -1664,7 +2749,7 @@ index 9145254d..a917ff13 100644
  	_dialogueMan = createDialogueManager(z);
  	assert(_dialogueMan);
 diff --git a/engines/parallaction/disk.h b/engines/parallaction/disk.h
-index 460d3a7c..46604e25 100644
+index 460d3a7c..16bb90ba 100644
 --- a/engines/parallaction/disk.h
 +++ b/engines/parallaction/disk.h
 @@ -65,6 +65,10 @@ public:
@@ -1678,7 +2763,7 @@ index 460d3a7c..46604e25 100644
  	virtual Script* loadScript(const char* name) = 0;
  	virtual GfxObj* loadTalk(const char *name) = 0;
  	virtual GfxObj* loadObjects(const char *name, uint8 part = 0) = 0;
-@@ -201,6 +205,23 @@ protected:
+@@ -201,6 +205,27 @@ protected:
  public:
  	Disk_br(Parallaction *vm);
  	~Disk_br() override;
@@ -1688,9 +2773,12 @@ index 460d3a7c..46604e25 100644
 +
 +protected:
 +	// Line edits of location and script files (loc/righe.txt, from the patch): in part P, file F,
-+	// the consecutive lines 'from' (compared trimmed, ignoring case) become the lines 'to'.
++	// the consecutive lines 'from' (compared trimmed, ignoring case) become the lines 'to'. Optional
++	// files (loc/directors-cut.txt) are applied after it, only while their setting is not false.
 +	struct LineEdit {
 +		int part;
++		Common::String source;		// the file of the patch it comes from
++		Common::String setting;		// empty: always applied
 +		Common::String file;
 +		Common::StringArray from;
 +		Common::StringArray to;
@@ -1698,11 +2786,12 @@ index 460d3a7c..46604e25 100644
 +	Common::Array<LineEdit> _lineEdits;
 +	bool _lineEditsLoaded = false;
 +	void loadLineEdits();
++	void loadLineEdits(const char *path, const char *setting);
 +	Common::SeekableReadStream *applyLineEdits(Common::SeekableReadStream *stream, const Common::String &file);
  };
  
  //	for the moment DosDisk_br subclasses Disk. When Amiga support will
-@@ -222,6 +243,7 @@ public:
+@@ -222,6 +247,7 @@ public:
  	Common::String selectArchive(const Common::String &name) override;
  	void setLanguage(uint16 language) override;
  	Script* loadLocation(const char *name) override;
@@ -1711,7 +2800,7 @@ index 460d3a7c..46604e25 100644
  	GfxObj* loadTalk(const char *name) override;
  	GfxObj* loadObjects(const char *name, uint8 part = 0) override;
 diff --git a/engines/parallaction/disk_br.cpp b/engines/parallaction/disk_br.cpp
-index 664c7897..a610a32b 100644
+index 664c7897..4ef86d57 100644
 --- a/engines/parallaction/disk_br.cpp
 +++ b/engines/parallaction/disk_br.cpp
 @@ -21,6 +21,9 @@
@@ -1742,7 +2831,7 @@ index 664c7897..a610a32b 100644
  		int len = filename.size();
  		if (len > 8) {
  			debugC(9, kDebugDisk, "Disk_br::openFile: trimming filename (%s) to 8 characters", name.c_str());
-@@ -168,6 +171,144 @@ void DosDisk_br::init() {
+@@ -168,6 +171,162 @@ void DosDisk_br::init() {
  }
  
  
@@ -1773,10 +2862,23 @@ index 664c7897..a610a32b 100644
 +	return out;
 +}
 +
++// The files of line edits, in the order they are applied, and the setting that turns each one off
++// (none: always applied). Read when the location is loaded, so a change in game counts from the next one.
++static const struct { const char *file; const char *setting; } kLineEditFiles[] = {
++	{ "loc/righe.txt", "" },
++	{ "loc/directors-cut.txt", "bra_directors_cut" }
++};
++
 +void Disk_br::loadLineEdits() {
 +	_lineEditsLoaded = true;
++	for (uint n = 0; n < ARRAYSIZE(kLineEditFiles); n++)
++		loadLineEdits(kLineEditFiles[n].file, kLineEditFiles[n].setting);
++	debugC(1, kDebugDisk, "%d line edits loaded", _lineEdits.size());
++}
++
++void Disk_br::loadLineEdits(const char *path, const char *setting) {
 +	Common::File f;
-+	if (!f.open(Common::Path("loc/righe.txt", '/')))
++	if (!f.open(Common::Path(path, '/')))
 +		return;
 +	while (!f.eos() && !f.err()) {
 +		Common::String line = f.readLine();
@@ -1795,10 +2897,12 @@ index 664c7897..a610a32b 100644
 +		}
 +		w.push_back(cur);
 +		if (w.size() < 3 || w[0].empty() || !Common::isDigit(w[0][0]) || w[2].empty()) {
-+			warning("loc/righe.txt: bad line '%s'", line.c_str());
++			warning("%s: bad line '%s'", path, line.c_str());
 +			continue;
 +		}
 +		LineEdit e;
++		e.source = path;
++		e.setting = setting;
 +		e.part = atoi(w[0].c_str());
 +		e.file = w[1];
 +		e.file.trim();
@@ -1810,7 +2914,6 @@ index 664c7897..a610a32b 100644
 +			e.to = splitEditLines(w[3]);
 +		_lineEdits.push_back(e);
 +	}
-+	debugC(1, kDebugDisk, "%d line edits loaded", _lineEdits.size());
 +}
 +
 +Common::SeekableReadStream *Disk_br::applyLineEdits(Common::SeekableReadStream *stream, const Common::String &file) {
@@ -1829,9 +2932,13 @@ index 664c7897..a610a32b 100644
 +	}
 +	Common::String name(file);
 +	name.toLowercase();
++	Common::Array<bool> on;
 +	bool any = false;
-+	for (uint i = 0; i < _lineEdits.size() && !any; i++)
-+		any = _lineEdits[i].part == part && _lineEdits[i].file == name;
++	for (uint i = 0; i < _lineEdits.size(); i++) {
++		const LineEdit &e = _lineEdits[i];
++		on.push_back(e.part == part && e.file == name && (e.setting.empty() || braSettingOn(e.setting.c_str())));
++		any = any || on.back();
++	}
 +	if (!any)
 +		return stream;
 +
@@ -1846,7 +2953,7 @@ index 664c7897..a610a32b 100644
 +
 +	for (uint i = 0; i < _lineEdits.size(); i++) {
 +		const LineEdit &e = _lineEdits[i];
-+		if (e.part != part || e.file != name)
++		if (!on[i])
 +			continue;
 +		int applied = 0;
 +		for (uint at = 0; at + e.from.size() <= lines.size(); ) {
@@ -1871,7 +2978,7 @@ index 664c7897..a610a32b 100644
 +			at += e.to.size();
 +			applied++;
 +		}
-+		debugC(1, kDebugDisk, "loc/righe.txt: %s '%s' applied %d times", name.c_str(), e.from[0].c_str(), applied);
++		debugC(1, kDebugDisk, "%s: %s '%s' applied %d times", e.source.c_str(), name.c_str(), e.from[0].c_str(), applied);
 +	}
 +
 +	Common::String text;
@@ -1887,7 +2994,7 @@ index 664c7897..a610a32b 100644
  GfxObj* DosDisk_br::loadTalk(const char *name) {
  	debugC(5, kDebugDisk, "DosDisk_br::loadTalk(%s)", name);
  
-@@ -190,18 +331,55 @@ Script* DosDisk_br::loadLocation(const char *name) {
+@@ -190,18 +349,55 @@ Script* DosDisk_br::loadLocation(const char *name) {
  	static const char * const langs[4] = { "it/", "fr/", "en/", "ge/" };
  
  	Common::String fullName(name);
@@ -1946,7 +3053,7 @@ index 664c7897..a610a32b 100644
  }
  
  //	there are no Head resources in Big Red Adventure
-@@ -291,7 +469,7 @@ Frames* DosDisk_br::loadFrames(const char* name) {
+@@ -291,7 +487,7 @@ Frames* DosDisk_br::loadFrames(const char* name) {
  	debugC(5, kDebugDisk, "DosDisk_br::loadFrames");
  
  	Common::String path(name);
@@ -1955,7 +3062,7 @@ index 664c7897..a610a32b 100644
  		stream = openFile(path);
  	} else {
  		stream = openFile("ani/" + Common::String(name), ".ani");
-@@ -315,6 +493,7 @@ void DosDisk_br::loadSlide(BackgroundInfo& info, const char *name) {
+@@ -315,6 +511,7 @@ void DosDisk_br::loadSlide(BackgroundInfo& info, const char *name) {
  	loadBitmap(*stream, info.bg, rgb);
  	info.width = info.bg.w;
  	info.height = info.bg.h;
@@ -1963,7 +3070,7 @@ index 664c7897..a610a32b 100644
  
  	delete stream;
  
-@@ -371,6 +550,7 @@ void DosDisk_br::loadScenery(BackgroundInfo& info, const char *name, const char
+@@ -371,6 +568,7 @@ void DosDisk_br::loadScenery(BackgroundInfo& info, const char *name, const char
  		loadBitmap(*stream, info.bg, rgb);
  		info.width = info.bg.w;
  		info.height = info.bg.h;
@@ -1971,7 +3078,7 @@ index 664c7897..a610a32b 100644
  
  		for (uint i = 0; i < 256; i++) {
  			info.palette.setEntry(i, rgb[i] >> 2, rgb[i+256] >> 2, rgb[i+512] >> 2);
-@@ -650,7 +830,7 @@ Frames* AmigaDisk_br::loadFrames(const char* name) {
+@@ -650,7 +848,7 @@ Frames* AmigaDisk_br::loadFrames(const char* name) {
  	debugC(5, kDebugDisk, "AmigaDisk_br::loadFrames");
  
  	Common::String path(name);
@@ -1981,7 +3088,7 @@ index 664c7897..a610a32b 100644
  	} else {
  		stream = openFile("anims/" + Common::String(name), ".ani");
 diff --git a/engines/parallaction/exec_br.cpp b/engines/parallaction/exec_br.cpp
-index 3cf1c945..3a6a88c9 100644
+index 3cf1c945..f72e5d7a 100644
 --- a/engines/parallaction/exec_br.cpp
 +++ b/engines/parallaction/exec_br.cpp
 @@ -22,7 +22,9 @@
@@ -2088,7 +3195,15 @@ index 3cf1c945..3a6a88c9 100644
  }
  
  
-@@ -318,12 +343,19 @@ DECLARE_COMMAND_OPCODE(text) {
+@@ -305,6 +330,7 @@ DECLARE_COMMAND_OPCODE(give) {
+ 
+ 	if (targetInventory) {
+ 		targetInventory->addItem(item);
++		_vm->markTaken(item);
+ 	}
+ 
+ 	_vm->_inventory->removeItem(item);
+@@ -318,12 +344,19 @@ DECLARE_COMMAND_OPCODE(text) {
  
  DECLARE_COMMAND_OPCODE(part) {
  	_vm->_nextPart = ctxt._cmd->_counterValue;
@@ -2110,7 +3225,7 @@ index 3cf1c945..3a6a88c9 100644
  }
  
  
-@@ -333,12 +365,12 @@ DECLARE_COMMAND_OPCODE(ret) {
+@@ -333,12 +366,12 @@ DECLARE_COMMAND_OPCODE(ret) {
  
  
  DECLARE_COMMAND_OPCODE(onsave) {
@@ -2125,7 +3240,7 @@ index 3cf1c945..3a6a88c9 100644
  }
  
  DECLARE_INSTRUCTION_OPCODE(invalid) {
-@@ -346,8 +378,7 @@ DECLARE_INSTRUCTION_OPCODE(invalid) {
+@@ -346,8 +379,7 @@ DECLARE_INSTRUCTION_OPCODE(invalid) {
  }
  
  DECLARE_COMMAND_OPCODE(clear) {
@@ -2135,7 +3250,7 @@ index 3cf1c945..3a6a88c9 100644
  		g_globalFlags &= ~ctxt._cmd->_flags;
  	} else {
  		_vm->clearLocationFlags(ctxt._cmd->_flags);
-@@ -375,8 +406,7 @@ DECLARE_COMMAND_OPCODE(get) {
+@@ -375,8 +407,7 @@ DECLARE_COMMAND_OPCODE(get) {
  }
  
  DECLARE_COMMAND_OPCODE(toggle) {
@@ -2145,7 +3260,7 @@ index 3cf1c945..3a6a88c9 100644
  		g_globalFlags ^= ctxt._cmd->_flags;
  	} else {
  		_vm->toggleLocationFlags(ctxt._cmd->_flags);
-@@ -392,8 +422,7 @@ DECLARE_COMMAND_OPCODE(invalid) {
+@@ -392,8 +423,7 @@ DECLARE_COMMAND_OPCODE(invalid) {
  }
  
  DECLARE_COMMAND_OPCODE(set) {
@@ -2155,7 +3270,7 @@ index 3cf1c945..3a6a88c9 100644
  		g_globalFlags |= ctxt._cmd->_flags;
  	} else {
  		_vm->setLocationFlags(ctxt._cmd->_flags);
-@@ -514,6 +543,24 @@ DECLARE_INSTRUCTION_OPCODE(print) {
+@@ -514,6 +544,24 @@ DECLARE_INSTRUCTION_OPCODE(print) {
  
  DECLARE_INSTRUCTION_OPCODE(text) {
  	InstructionPtr inst = ctxt._inst;
@@ -2180,7 +3295,7 @@ index 3cf1c945..3a6a88c9 100644
  	_vm->setupSubtitles(inst->_text.c_str(), inst->_text2.c_str(), inst->_y);
  }
  
-@@ -558,8 +605,12 @@ DECLARE_INSTRUCTION_OPCODE(stop) {
+@@ -558,8 +606,12 @@ DECLARE_INSTRUCTION_OPCODE(stop) {
  	if (!z) return;
  
  	if (ACTIONTYPE(z) == kZoneHear) {
@@ -2195,7 +3310,7 @@ index 3cf1c945..3a6a88c9 100644
  	} else {
  		z->_flags &= ~kFlagsActing;
  	}
-@@ -574,7 +625,8 @@ DECLARE_INSTRUCTION_OPCODE(loop) {
+@@ -574,7 +626,8 @@ DECLARE_INSTRUCTION_OPCODE(loop) {
  
  
  DECLARE_INSTRUCTION_OPCODE(endloop) {
@@ -2598,7 +3713,7 @@ index d2e212d7..8bdfd2af 100644
 +
  } // namespace Parallaction
 diff --git a/engines/parallaction/graphics.cpp b/engines/parallaction/graphics.cpp
-index a9b146f5..da10df7f 100644
+index a9b146f5..1feb9924 100644
 --- a/engines/parallaction/graphics.cpp
 +++ b/engines/parallaction/graphics.cpp
 @@ -22,12 +22,16 @@
@@ -2618,13 +3733,15 @@ index a9b146f5..da10df7f 100644
  #include "parallaction/parallaction.h"
  
  
-@@ -222,9 +226,18 @@ void Gfx::setPalette(Palette &pal) {
+@@ -222,9 +226,20 @@ void Gfx::setPalette(Palette &pal) {
  	byte sysPal[256*3];
  
  	uint n = pal.fillRGB(sysPal);
 +	if (_hd) {
 +		_hd->setPalette(sysPal, n);
 +		CursorMan.replaceCursorPalette(sysPal, 0, n);
++		if (_vm->_input && _vm->_gfx == this)
++			_vm->_input->paletteChanged();
 +		return;
 +	}
  	_vm->_system->getPaletteManager()->setPalette(sysPal, 0, n);
@@ -2637,7 +3754,7 @@ index a9b146f5..da10df7f 100644
  void Gfx::setBlackPalette() {
  	Palette pal;
  	setPalette(pal);
-@@ -300,6 +313,65 @@ void Gfx::drawInventory() {
+@@ -300,6 +315,65 @@ void Gfx::drawInventory() {
  	byte *data = _vm->_inventoryRenderer->getData();
  
  	copyRectToScreen(data, r.width(), r.left, r.top, r.width(), r.height());
@@ -2703,7 +3820,7 @@ index a9b146f5..da10df7f 100644
  }
  
  void Gfx::drawList(Graphics::Surface &surface, GfxObjArray &list) {
-@@ -319,6 +391,8 @@ void Gfx::copyRectToScreen(const byte *buf, int pitch, int x, int y, int w, int
+@@ -319,6 +393,8 @@ void Gfx::copyRectToScreen(const byte *buf, int pitch, int x, int y, int w, int
  			y += _scrollPosY;
  		}
  
@@ -2712,7 +3829,7 @@ index a9b146f5..da10df7f 100644
  		byte *dst = (byte *)_backBuffer.getBasePtr(x, y);
  		for (int i = 0; i < h; i++) {
  			memcpy(dst, buf, w);
-@@ -331,10 +405,16 @@ void Gfx::copyRectToScreen(const byte *buf, int pitch, int x, int y, int w, int
+@@ -331,10 +407,16 @@ void Gfx::copyRectToScreen(const byte *buf, int pitch, int x, int y, int w, int
  }
  
  void Gfx::clearScreen() {
@@ -2729,7 +3846,7 @@ index a9b146f5..da10df7f 100644
  		}
  	} else {
  		_vm->_system->fillScreen(0);
-@@ -356,12 +436,37 @@ void Gfx::unlockScreen() {
+@@ -356,12 +438,37 @@ void Gfx::unlockScreen() {
  }
  
  void Gfx::updateScreenIntern() {
@@ -2767,7 +3884,7 @@ index a9b146f5..da10df7f 100644
  }
  
  void Gfx::getScrollPos(Common::Point &p) {
-@@ -382,18 +487,58 @@ void Gfx::initiateScroll(int deltaX, int deltaY) {
+@@ -382,18 +489,58 @@ void Gfx::initiateScroll(int deltaX, int deltaY) {
  		_requestedHScrollDir = deltaX > 0 ? 1 : -1;
  		deltaX *= _requestedHScrollDir;
  		_requestedHScrollSteps = ((deltaX+31)/32) / _requestedHScrollDir;
@@ -2826,7 +3943,7 @@ index a9b146f5..da10df7f 100644
  	if (_requestedHScrollSteps) {
  		x += 32*_requestedHScrollDir;	// scroll 32 pixels at a time
  		_requestedHScrollSteps--;
-@@ -421,6 +566,9 @@ void Gfx::updateScreen() {
+@@ -421,6 +568,9 @@ void Gfx::updateScreen() {
  
  	bool skipBackground = (_backgroundInfo->bg.getPixels() == nullptr);	// don't render frame if background is missing
  
@@ -2836,7 +3953,7 @@ index a9b146f5..da10df7f 100644
  	if (!skipBackground) {
  		// background may not cover the whole screen, so adjust bulk update size
  		uint w = _backgroundInfo->width;
-@@ -521,7 +669,9 @@ void setupLabelSurface(Graphics::Surface &surf, uint w, uint h) {
+@@ -521,7 +671,9 @@ void setupLabelSurface(Graphics::Surface &surf, uint w, uint h) {
  	surf.fillRect(Common::Rect(w,h), LABEL_TRANSPARENT_COLOR);
  }
  
@@ -2847,7 +3964,7 @@ index a9b146f5..da10df7f 100644
  
  	Graphics::Surface *cnv = new Graphics::Surface;
  
-@@ -545,7 +695,7 @@ GfxObj *Gfx::renderFloatingLabel(Font *font, char *text) {
+@@ -545,7 +697,7 @@ GfxObj *Gfx::renderFloatingLabel(Font *font, char *text) {
  
  		setupLabelSurface(*cnv, w, h);
  
@@ -2856,7 +3973,7 @@ index a9b146f5..da10df7f 100644
  	}
  
  	GfxObj *obj = new GfxObj(kGfxObjTypeLabel, new SurfaceToFrames(cnv), "floatingLabel");
-@@ -556,7 +706,7 @@ GfxObj *Gfx::renderFloatingLabel(Font *font, char *text) {
+@@ -556,7 +708,7 @@ GfxObj *Gfx::renderFloatingLabel(Font *font, char *text) {
  	return obj;
  }
  
@@ -2865,7 +3982,7 @@ index a9b146f5..da10df7f 100644
  	hideFloatingLabel();
  
  	if (label) {
-@@ -567,6 +717,9 @@ void Gfx::showFloatingLabel(GfxObj *label) {
+@@ -567,6 +719,9 @@ void Gfx::showFloatingLabel(GfxObj *label) {
  		label->setFlags(kGfxObjVisible);
  
  		_floatingLabel = label;
@@ -2875,7 +3992,7 @@ index a9b146f5..da10df7f 100644
  		_labels.push_back(label);
  	}
  }
-@@ -621,12 +774,20 @@ void Gfx::updateFloatingLabel() {
+@@ -621,12 +776,20 @@ void Gfx::updateFloatingLabel() {
  
  	_floatingLabel->x = CLIP(cursor.x + offset.x, traits->_minX, traits->_maxX);
  	_floatingLabel->y = CLIP(cursor.y + offset.y, traits->_minY, traits->_maxY);
@@ -2897,7 +4014,7 @@ index a9b146f5..da10df7f 100644
  	Graphics::Surface *cnv = new Graphics::Surface;
  
  	uint w, h;
-@@ -747,7 +908,40 @@ Gfx::Gfx(Parallaction* vm) :
+@@ -747,7 +910,40 @@ Gfx::Gfx(Parallaction* vm) :
  	_gameType = _vm->getGameType();
  	_doubleBuffering = _gameType != GType_Nippon;
  
@@ -2939,7 +4056,7 @@ index a9b146f5..da10df7f 100644
  
  	setPalette(_palette);
  
-@@ -778,6 +972,7 @@ Gfx::Gfx(Parallaction* vm) :
+@@ -778,6 +974,7 @@ Gfx::Gfx(Parallaction* vm) :
  
  Gfx::~Gfx() {
  
@@ -2947,7 +4064,7 @@ index a9b146f5..da10df7f 100644
  	_backBuffer.free();
  
  	delete _backgroundInfo;
-@@ -811,6 +1006,20 @@ void Gfx::setItemFrame(uint item, uint16 f) {
+@@ -811,6 +1008,20 @@ void Gfx::setItemFrame(uint item, uint16 f) {
  	_items[item]->frame = f;
  }
  
@@ -2968,7 +4085,7 @@ index a9b146f5..da10df7f 100644
  
  GfxObj* Gfx::registerBalloon(Frames *frames, const char *text) {
  
-@@ -880,10 +1089,22 @@ void Gfx::setBackground(uint type, BackgroundInfo *info) {
+@@ -880,10 +1091,22 @@ void Gfx::setBackground(uint type, BackgroundInfo *info) {
  		}
  	}
  
@@ -2991,7 +4108,7 @@ index a9b146f5..da10df7f 100644
  }
  
  
-@@ -1158,4 +1379,21 @@ void PathBuffer::bltCopy(uint16 dx, uint16 dy, const PathBuffer &src, uint16 sx,
+@@ -1158,4 +1381,24 @@ void PathBuffer::bltCopy(uint16 dx, uint16 dy, const PathBuffer &src, uint16 sx,
  	}
  }
  
@@ -3002,6 +4119,8 @@ index a9b146f5..da10df7f 100644
 +	bool c = !_hd->classic();
 +	_hd->setClassic(c);
 +	hdTextSetClassic(c);
++	if (_vm->_input)
++		_vm->_input->refreshCursor();	// the HD pointer or the original one upscaled
 +	ConfMan.setBool("hd_classic", c, Common::ConfigManager::kApplicationDomain);
 +	ConfMan.flushToDisk();
 +	if (_vm->getGameType() == GType_BRA)
@@ -3009,7 +4128,8 @@ index a9b146f5..da10df7f 100644
 +	// static screens (menus, comments) are not redrawn until something changes: do it now
 +	if (_backgroundInfo)
 +		updateScreen();
-+	g_system->displayMessageOnOSD(Common::U32String(c ? "Originale" : "Remastered"));
++	// "Originale" only with the game in Italian
++	g_system->displayMessageOnOSD(Common::U32String(c ? (_vm->getInternLanguage() == kItalian ? "Originale" : "Original") : "Remastered"));
 +}
 +
  } // namespace Parallaction
@@ -3238,7 +4358,7 @@ index 35729e88..becf697f 100644
  	// overlay mode enables drawing of graphics with automatic screen-to-game coordinate translation
  	bool				_overlayMode;
 diff --git a/engines/parallaction/gui_br.cpp b/engines/parallaction/gui_br.cpp
-index 6c4ca47d..46f34ed7 100644
+index 6c4ca47d..6892fd66 100644
 --- a/engines/parallaction/gui_br.cpp
 +++ b/engines/parallaction/gui_br.cpp
 @@ -19,6 +19,7 @@
@@ -3386,21 +4506,23 @@ index 6c4ca47d..46f34ed7 100644
  			close = _vm->_saveLoad->loadGame();
  			break;
  
-@@ -481,8 +517,11 @@ public:
+@@ -481,8 +517,13 @@ public:
  	QuitDialogInputState_BR(Parallaction_br *vm, MenuInputHelper *helper) : MenuInputState("quitdialog", helper), _vm(vm) {
  		_font = _vm->_dialogueFont;
  
 -		const char *question = "Do you really want to quit ?";
 -		const char *option = "Yes No";
 +		static const char *const questions[4] = { "Vuoi davvero uscire ?", "Voulez-vous vraiment quitter ?", "Do you really want to quit ?", "Wirklich beenden ?" };
-+		static const char *const options[4] = { "Si No", "Oui Non", "Yes No", "Ja Nein" };
++		// code page 850 like the game's texts: "S\x8d" is "Si" with the grave accent (Si' with the bitmap fonts)
++		static const char *const options[4] = { "S\x8d No", "Oui Non", "Yes No", "Ja Nein" };
 +		int lang = CLIP(_vm->_langIndex, 0, 3);
 +		const char *question = questions[lang];
-+		const char *option = options[lang];
++		Common::String optionText = Parallaction::bitmapFontSpelling(options[lang]);
++		const char *option = optionText.c_str();
  
  		int questionW = _font->getStringWidth(question);
  		int optionW = _font->getStringWidth(option);
-@@ -519,7 +558,8 @@ public:
+@@ -519,7 +560,8 @@ public:
  			return this;
  		}
  
@@ -3412,10 +4534,10 @@ index 6c4ca47d..46f34ed7 100644
  		} else
 diff --git a/engines/parallaction/hd.cpp b/engines/parallaction/hd.cpp
 new file mode 100644
-index 00000000..9e043cea
+index 00000000..bab73703
 --- /dev/null
 +++ b/engines/parallaction/hd.cpp
-@@ -0,0 +1,3209 @@
+@@ -0,0 +1,3295 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -3524,6 +4646,12 @@ index 00000000..9e043cea
 +	for (Common::HashMap<uint32, HDSprite *>::iterator it = _sprCache.begin(); it != _sprCache.end(); ++it) {
 +		if (it->_value) {
 +			delete[] it->_value->px;
++			delete it->_value;
++		}
++	}
++	for (Common::HashMap<Common::String, Graphics::Surface *>::iterator it = _pictures.begin(); it != _pictures.end(); ++it) {
++		if (it->_value) {
++			it->_value->free();
 +			delete it->_value;
 +		}
 +	}
@@ -5554,6 +6682,86 @@ index 00000000..9e043cea
 +	}
 +}
 +
++// A picture of the patch for an original image (the mouse pointers, hd/pointer1.png...), at the HD scale.
++// The file may be any integer multiple of the original size not below the scale: reduced with a box
++// filter weighted by alpha, as the HD sprites
++const Graphics::Surface *HDRenderer::hdPicture(const Common::String &name, int w, int h) {
++	Common::HashMap<Common::String, Graphics::Surface *>::iterator it = _pictures.find(name);
++	if (it != _pictures.end())
++		return it->_value;
++	_pictures[name] = nullptr;	// failures are cached too
++	Common::SeekableReadStream *stream = openHDFile(name);
++	if (!stream || w <= 0 || h <= 0) {
++		delete stream;
++		return nullptr;
++	}
++	Image::PNGDecoder png;
++	bool ok = png.loadStream(*stream);
++	delete stream;
++	if (!ok)
++		return nullptr;
++	const Graphics::Surface *src = png.getSurface();
++	int k = src->w / w;
++	if (src->w % w || src->h % h || src->h / h != k || k < _scale) {
++		warning("HD picture %s: unexpected size %dx%d (original %dx%d, scale %d)", name.c_str(), src->w, src->h, w, h, _scale);
++		return nullptr;
++	}
++	Graphics::Surface *rgb = src->convertTo(cursorFormat(), png.getPalette().data(), png.getPalette().size());
++	Graphics::Surface *out = new Graphics::Surface;
++	out->create(w * _scale, h * _scale, cursorFormat());
++	for (int y = 0; y < out->h; y++) {
++		uint32 *dp = (uint32 *)out->getBasePtr(0, y);
++		for (int x = 0; x < out->w; x++) {
++			// source pixels [x*k/s, (x+1)*k/s) with partial weights at the ends (in 1/s units)
++			uint32 aa = 0, ar = 0, ag = 0, ab = 0, aw = 0;
++			int sy0 = y * k, sy1 = (y + 1) * k, sx0 = x * k, sx1 = (x + 1) * k;
++			for (int yy = sy0 / _scale; yy * _scale < sy1; yy++) {
++				int wy = MIN(sy1, (yy + 1) * _scale) - MAX(sy0, yy * _scale);
++				const uint32 *sp = (const uint32 *)rgb->getBasePtr(0, yy);
++				for (int xx = sx0 / _scale; xx * _scale < sx1; xx++) {
++					int wx = MIN(sx1, (xx + 1) * _scale) - MAX(sx0, xx * _scale);
++					uint32 c = sp[xx], a = c >> 24, wgt = wx * wy;
++					aa += a * wgt;
++					ar += ((c >> 16) & 0xff) * a * wgt;
++					ag += ((c >> 8) & 0xff) * a * wgt;
++					ab += (c & 0xff) * a * wgt;
++					aw += wgt;
++				}
++			}
++			dp[x] = aa ? ((aa / aw) << 24) | ((ar / aa) << 16) | ((ag / aa) << 8) | (ab / aa) : 0;
++		}
++	}
++	rgb->free();
++	delete rgb;
++	_pictures[name] = out;
++	return out;
++}
++
++const uint32 *HDRenderer::spriteImage(const byte *pixels, int w, int h, byte transparentKey) {
++	if (!_sprEnabled || w <= 0 || h <= 0 || w >= 1024 || h >= 1024)
++		return nullptr;
++	uint32 key = frameKey(pixels, w, h);
++	Common::HashMap<uint32, SpriteEntry>::iterator ie = _sprIndex.find(key);
++	if (ie == _sprIndex.end() || ie->_value.w != w || ie->_value.h != h || ie->_value.ml || ie->_value.mr)
++		return nullptr;
++	HDSprite *spr;
++	Common::HashMap<uint32, HDSprite *>::iterator ic = _sprCache.find(key);
++	if (ic != _sprCache.end()) {
++		spr = ic->_value;
++	} else {
++		spr = loadSprite(key, ie->_value, pixels, transparentKey);
++		_sprCache[key] = spr;
++		if (spr)
++			for (int i = 0; i < w * h; i++)
++				if (pixels[i] != transparentKey)
++					spr->used[pixels[i] >> 5] |= 1u << (pixels[i] & 31);
++	}
++	if (!spr)
++		return nullptr;
++	spr->lastUsed = _frameNo;
++	return spr->px;
++}
++
 +byte *HDRenderer::scaleIndexed(const byte *src, int w, int h, int pitch) {
 +	scaleFrame(src, pitch, w, h);
 +	int n = w * h * _scale * _scale;
@@ -6627,10 +7835,10 @@ index 00000000..9e043cea
 +} // End of namespace Parallaction
 diff --git a/engines/parallaction/hd.h b/engines/parallaction/hd.h
 new file mode 100644
-index 00000000..b92e9938
+index 00000000..41090ebb
 --- /dev/null
 +++ b/engines/parallaction/hd.h
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,373 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -6722,6 +7930,17 @@ index 00000000..b92e9938
 +
 +	// scale an 8-bit image (e.g. a cursor) by the HD factor with the pixel-art scaler
 +	byte *scaleIndexed(const byte *src, int w, int h, int pitch);
++	// --- HD pictures for the mouse pointer (input.cpp) -------------------
++	// a picture of the patch (hd/<name>, PNG with alpha) for an original image of w x h game pixels,
++	// any integer multiple of it not below the HD scale: ARGB (cursorFormat, alpha not premultiplied) at
++	// the HD scale, cached; nullptr if missing or of the wrong size
++	const Graphics::Surface *hdPicture(const Common::String &name, int w, int h);
++	// the HD image of a sprite frame (hd/spr, as for the sprites of the scene) at the HD scale, ARGB
++	// (cursorFormat), nullptr if there is none; valid until the next frame is composed
++	const uint32 *spriteImage(const byte *pixels, int w, int h, byte transparentKey);
++	// a palette entry of the current palette as an opaque cursorFormat pixel
++	uint32 paletteARGB(byte i) const { return 0xff000000 | (_curPal[i * 3] << 16) | (_curPal[i * 3 + 1] << 8) | _curPal[i * 3 + 2]; }
++	static Graphics::PixelFormat cursorFormat() { return Graphics::PixelFormat(4, 8, 8, 8, 8, 16, 8, 0, 24); }
 +
 +	// --- HD sprites -------------------------------------------------------
 +	// Every sprite frame drawn into the back buffer leaves, per pixel, a
@@ -6753,6 +7972,20 @@ index 00000000..b92e9938
 +	static uint32 spriteKey(const byte *pixels, int w, int h);
 +	// --- HD text --------------------------------------------------------
 +	enum { kNumHDFonts = 3 };	// 0: dialogue (comic), 1: labels/menus (russia), 2: subtitles (drawn only)
++	// an HD font atlas (hd/fonts/<name>.png + .dat, at 3x the original font)
++	struct HDFont {
++		bool ok = false;
++		int line = 0, asc = 0, outline = 0;
++		struct Glyph {
++			uint16 ax, ay, w, h;
++			int16 bx, by;
++			uint16 adv;
++		} g[256];
++		Common::Array<byte> atlas;	// fill, outline coverage
++		int aw = 0, ah = 0;
++	};
++	// the loaded atlas of a font, nullptr if it is missing or switched off (credits.cpp draws with it)
++	const HDFont *hdFont(int id) const { return id >= 0 && id < kNumHDFonts && _fonts[id].ok ? &_fonts[id] : nullptr; }
 +	bool fontsEnabled() const;
 +	void addSurfaceText(Graphics::Surface *surf, int offY, int frameH, int x, int y, const Common::Rect &clip, bool band = false);
 +	// a remastered balloon of this frame (gfxbase.cpp): its shape, frame origin in back buffer pixels
@@ -6945,17 +8178,6 @@ index 00000000..b92e9938
 +	int _idW, _idH;
 +	Common::String _dumpDir;
 +	Common::HashMap<uint32, bool> _dumped;
-+	struct HDFont {
-+		bool ok = false;
-+		int line = 0, asc = 0, outline = 0;
-+		struct Glyph {
-+			uint16 ax, ay, w, h;
-+			int16 bx, by;
-+			uint16 adv;
-+		} g[256];
-+		Common::Array<byte> atlas;	// fill, outline coverage
-+		int aw = 0, ah = 0;
-+	};
 +	HDFont _fonts[kNumHDFonts];
 +	Common::Array<FrameText> _frameText;
 +	struct BalloonDraw {
@@ -6972,6 +8194,7 @@ index 00000000..b92e9938
 +	void drawFrameText(const FrameText &ft, const Common::Rect &area, int scrollX, int scrollY);
 +	void drawTexts(const Common::Array<Common::Rect> &areas, int scrollX, int scrollY);
 +
++	Common::HashMap<Common::String, Graphics::Surface *> _pictures;	// see hdPicture(), failures cached as nullptr
 +	void loadSpriteIndex();
 +	HDSprite *loadSprite(uint32 key, const SpriteEntry &e, const byte *pixels, byte transparentKey, int sub = -1);
 +	// timed HD frames: the one shown last for each key, and the sprites whose image changed by the
@@ -6991,10 +8214,10 @@ index 00000000..b92e9938
 +#endif
 diff --git a/engines/parallaction/hints.cpp b/engines/parallaction/hints.cpp
 new file mode 100644
-index 00000000..240de2a6
+index 00000000..0d77f9ca
 --- /dev/null
 +++ b/engines/parallaction/hints.cpp
-@@ -0,0 +1,496 @@
+@@ -0,0 +1,607 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -7129,8 +8352,61 @@ index 00000000..240de2a6
 +	return bit;
 +}
 +
-+// one term of a condition: GF:NAME, LF:location:NAME, INV:name, CNT:NAME>n, LOC:name, VISTO:name, sempre,
-+// mai; ! negates
++// the index the location parser gives a zone or an animation of a location (1 for the first ZONE or ANIMATION of
++// its script, in order), 0 if the script has none with that name
++static uint16 zoneIndexInScript(Script *script, const Common::String &zone) {
++	uint16 prog = 0;
++	char buf[400];
++	const char *end = nullptr;
++	while (char *line = script->readLine(buf, sizeof(buf) - 1)) {
++		Common::StringTokenizer tok(line, " \t");
++		Common::String w = tok.nextToken();
++		if (end) {
++			if (!scumm_stricmp(w.c_str(), end))
++				end = nullptr;
++			continue;
++		}
++		bool isZone = !scumm_stricmp(w.c_str(), "ZONE"), isAnim = !scumm_stricmp(w.c_str(), "ANIMATION");
++		if (!isZone && !isAnim)
++			continue;
++		prog++;
++		if (!scumm_stricmp(tok.nextToken().c_str(), zone.c_str()))
++			return prog;
++		end = isZone ? "ENDZONE" : "ENDANIMATION";
++	}
++	return 0;
++}
++
++// ZONA:location:zone. The current location: its loaded zone or animation. Another one: the flags the engine
++// keeps for it (_zoneFlags, stored when leaving it and in the saved games); false if never entered
++bool Parallaction_br::hintZoneOn(const Common::String &loc, const Common::String &zone) {
++	if (!scumm_stricmp(_location._name, loc.c_str())) {
++		ZonePtr z = _location.findZone(zone.c_str());
++		if (z)
++			return !(z->_flags & kFlagsRemove);
++		AnimationPtr a = _location.findAnimation(zone.c_str());
++		if (a)
++			return !(a->_flags & kFlagsRemove);
++		warning("hint: unknown zone '%s' in %s", zone.c_str(), loc.c_str());
++		return false;
++	}
++	for (uint i = 0; i < NUM_LOCATIONS && _locationNames[i][0]; i++) {
++		if (scumm_stricmp(_locationNames[i], loc.c_str()))
++			continue;
++		Script *script = _disk->loadLocation(loc.c_str());
++		uint16 index = zoneIndexInScript(script, zone);
++		delete script;
++		if (!index || index >= NUM_ZONES) {
++			warning("hint: unknown zone '%s' in %s", zone.c_str(), loc.c_str());
++			return false;
++		}
++		return !(_zoneFlags[i][index] & kFlagsRemove);
++	}
++	return false;
++}
++
++// one term of a condition: GF:NAME, LF:location:NAME, INV:[character:]name, PRESO:name, ZONA:location:zone,
++// PG:character, CNT:NAME>n, LOC:name, VISTO:name, sempre, mai; ! negates (docs/aiuti.md)
 +bool Parallaction_br::hintTerm(const Common::String &t0) {
 +	Common::String t = t0;
 +	bool neg = false;
@@ -7162,8 +8438,39 @@ index 00000000..240de2a6
 +				}
 +		}
 +	} else if (t.hasPrefix("INV:")) {
-+		uint16 i = _objectsNames ? _objectsNames->lookup(t.c_str() + 4) : Table::notFound;
-+		v = i != Table::notFound && _inventory && _inventory->findItem(4 + i) != -1;
++		// INV:name (the current character), INV:<dino|donna|doug>:name, INV:*:name (any of the three)
++		Common::String rest = t.substr(4);
++		int colon = rest.findFirstOf(':');
++		Common::String who = colon > 0 ? Common::String(rest.c_str(), colon) : Common::String();
++		Common::String name = colon > 0 ? rest.substr(colon + 1) : rest;
++		uint16 i = _objectsNames ? _objectsNames->lookup(name.c_str()) : Table::notFound;
++		if (i != Table::notFound) {
++			if (who.empty()) {
++				v = _inventory && _inventory->findItem(4 + i) != -1;
++			} else if (who == "*") {
++				Inventory *inv[3] = { _dinoInventory, _donnaInventory, _dougInventory };
++				for (int k = 0; k < 3 && !v; k++)
++					v = inv[k] && inv[k]->findItem(4 + i) != -1;
++			} else {
++				Inventory *inv = findInventory(who.c_str());
++				if (!inv)
++					warning("hint: unknown character in '%s'", t.c_str());
++				v = inv && inv->findItem(4 + i) != -1;
++			}
++		}
++	} else if (t.hasPrefix("PRESO:") || t.hasPrefix("TAKEN:")) {
++		// the item has been in an inventory at least once in this part
++		uint16 i = _objectsNames ? _objectsNames->lookup(t.c_str() + 6) : Table::notFound;
++		v = i != Table::notFound && wasTaken(4 + i);
++	} else if (t.hasPrefix("ZONA:") || t.hasPrefix("ZONE:")) {
++		// ZONA:location:zone: the zone is on (not removed by OFF or FLAGS REMOVE)
++		Common::String rest = t.substr(5);
++		int colon = rest.findFirstOf(':');
++		if (colon > 0)
++			v = hintZoneOn(Common::String(rest.c_str(), colon), rest.substr(colon + 1));
++	} else if (t.hasPrefix("PG:") || t.hasPrefix("PC:")) {
++		// the character being played
++		v = !scumm_stricmp(_char.getName(), t.c_str() + 3);
 +	} else if (t.hasPrefix("CNT:")) {
 +		Common::String rest = t.substr(4);
 +		int op = rest.findFirstOf("<>=");
@@ -7436,8 +8743,38 @@ index 00000000..240de2a6
 +}
 +
 +
++// hint/<language>.txt of the game's language (German: de or ge), else English, else Italian (the hints have
++// no original text to fall back to); code: the language of the file, for the window's own words
++static Common::Array<HintEntry> loadGameHints(uint lang, Common::String &code) {
++	Common::StringArray langs = braLanguageCodes(lang);
++	langs.push_back("en");
++	langs.push_back("it");
++	Common::Array<HintEntry> list;
++	code = langs[0];
++	for (uint i = 0; list.empty() && i < langs.size(); i++) {
++		list = loadHints(langs[i].c_str());
++		if (!list.empty())
++			code = langs[i];
++	}
++	return list;
++}
++
++// the window's own words in the language of the hints shown (UTF-8)
++static Common::U32String hintWord(const Common::String &code, const char *it, const char *en, const char *fr, const char *de) {
++	const char *t = en;
++	if (code == "it")
++		t = it;
++	else if (code == "fr")
++		t = fr;
++	else if (code == "de" || code == "ge")
++		t = de;
++	return Common::U32String(t, Common::kUtf8);
++}
++
 +void Parallaction_br::logHint() {
-+	Common::Array<HintEntry> list = loadHints("it");
++	Common::String code;
++	Common::Array<HintEntry> list = loadGameHints(getInternLanguage(), code);
++	debug("HINT file hint/%s.txt", code.c_str());
 +	for (uint i = 0; i < list.size(); i++)
 +		if (list[i].part == (int)_part && !hintCondition(list[i].done)) {
 +			debug("HINT part %d #%u: %s", _part, i, list[i].title.c_str());
@@ -7447,12 +8784,8 @@ index 00000000..240de2a6
 +}
 +
 +void Parallaction_br::showHint() {
-+	static const char *const langs[] = { "it", "fr", "en", "ge" };
-+	uint lang = getInternLanguage();
-+	Common::Array<HintEntry> list = loadHints(lang < ARRAYSIZE(langs) ? langs[lang] : "it");
-+	if (list.empty() && lang != 0)
-+		list = loadHints("it");
-+	bool it = lang == 0 || list.empty();
++	Common::String code;
++	Common::Array<HintEntry> list = loadGameHints(getInternLanguage(), code);
 +
 +	const HintEntry *found = nullptr;
 +	bool anyForPart = false;
@@ -7469,12 +8802,13 @@ index 00000000..240de2a6
 +	// UTF-8 file -> the GUI (U32String)
 +	Common::U32String text;
 +	if (!found) {
-+		text = Common::U32String(anyForPart
-+			? (it ? "Hai fatto tutto quello che serve in questa parte: prosegui!" : "You have done everything needed in this part: go on!")
-+			: (it ? "Per questa parte del gioco gli aiuti non sono ancora disponibili." : "No hints yet for this part of the game."),
-+			Common::kUtf8);
-+		HintDialog dlg(Common::U32String(it ? "Aiuti" : "Hints", Common::kUtf8), text, Common::U32String(), Common::U32String(),
-+			Common::U32String(), Common::U32String(), Common::U32String(it ? "Chiudi" : "Close", Common::kUtf8), Common::U32String());
++		text = anyForPart
++			? hintWord(code, "Hai fatto tutto quello che serve in questa parte: prosegui!", "You have done everything needed in this part: go on!",
++				"Vous avez fait tout le nécessaire dans cette partie : continuez !", "Du hast in diesem Teil alles Nötige erledigt: weiter geht's!")
++			: hintWord(code, "Per questa parte del gioco gli aiuti non sono ancora disponibili.", "No hints yet for this part of the game.",
++				"Pas encore d'aide pour cette partie du jeu.", "Für diesen Teil des Spiels gibt es noch keine Hilfe.");
++		HintDialog dlg(hintWord(code, "Aiuti", "Hints", "Aide", "Hilfe"), text, Common::U32String(), Common::U32String(),
++			Common::U32String(), Common::U32String(), hintWord(code, "Chiudi", "Close", "Fermer", "Schließen"), Common::U32String());
 +		runDialog(dlg);
 +		return;
 +	}
@@ -7483,16 +8817,16 @@ index 00000000..240de2a6
 +	slashToNewline(hint);
 +	slashToNewline(sol);
 +	HintDialog dlg(Common::U32String(title.c_str(), Common::kUtf8), Common::U32String(situation.c_str(), Common::kUtf8),
-+		Common::U32String(it ? "Indizio" : "Hint", Common::kUtf8), Common::U32String(hint.c_str(), Common::kUtf8),
-+		Common::U32String(it ? "Soluzione" : "Solution", Common::kUtf8), Common::U32String(sol.c_str(), Common::kUtf8),
-+		Common::U32String(it ? "Chiudi" : "Close", Common::kUtf8),
-+		Common::U32String(it ? "Mostra la soluzione" : "Show the solution", Common::kUtf8));
++		hintWord(code, "Indizio", "Hint", "Indice", "Tipp"), Common::U32String(hint.c_str(), Common::kUtf8),
++		hintWord(code, "Soluzione", "Solution", "Solution", "Lösung"), Common::U32String(sol.c_str(), Common::kUtf8),
++		hintWord(code, "Chiudi", "Close", "Fermer", "Schließen"),
++		hintWord(code, "Mostra la soluzione", "Show the solution", "Afficher la solution", "Lösung zeigen"));
 +	runDialog(dlg);
 +}
 +
 +} // End of namespace Parallaction
 diff --git a/engines/parallaction/input.cpp b/engines/parallaction/input.cpp
-index 62534987..87aac515 100644
+index 62534987..1721ef8b 100644
 --- a/engines/parallaction/input.cpp
 +++ b/engines/parallaction/input.cpp
 @@ -19,6 +19,7 @@
@@ -7511,7 +8845,7 @@ index 62534987..87aac515 100644
  #include "parallaction/parallaction.h"
  #include "parallaction/debug.h"
  
-@@ -82,6 +84,8 @@ Input::Input(Parallaction *vm) : _vm(vm) {
+@@ -82,11 +84,14 @@ Input::Input(Parallaction *vm) : _vm(vm) {
  }
  
  Input::~Input() {
@@ -7520,7 +8854,13 @@ index 62534987..87aac515 100644
  	if (_gameType == GType_Nippon) {
  		delete _mouseArrow;
  	}
-@@ -105,14 +109,34 @@ void Input::readInput() {
+ 
+ 	delete _comboArrow;
++	_cursorCopy.free();
+ 	delete _dinoCursor;
+ 	delete _dougCursor;
+ 	delete _donnaCursor;
+@@ -105,14 +110,34 @@ void Input::readInput() {
  	_mouseButtons = kMouseNone;
  	_hasKeyPressEvent = false;
  
@@ -7555,7 +8895,7 @@ index 62534987..87aac515 100644
  
  			updateMousePos = false;
  			break;
-@@ -127,10 +151,25 @@ void Input::readInput() {
+@@ -127,10 +152,25 @@ void Input::readInput() {
  
  		case Common::EVENT_RBUTTONDOWN:
  			_mouseButtons = kMouseRightDown;
@@ -7581,7 +8921,7 @@ index 62534987..87aac515 100644
  			break;
  
  		case Common::EVENT_RETURN_TO_LAUNCHER:
-@@ -144,9 +183,79 @@ void Input::readInput() {
+@@ -144,9 +184,79 @@ void Input::readInput() {
  
  	}
  
@@ -7663,7 +9003,7 @@ index 62534987..87aac515 100644
  }
  
  bool Input::getLastKeyDown(uint16 &ascii) {
-@@ -167,13 +276,13 @@ void Input::waitForButtonEvent(uint32 buttonEventMask, int32 timeout) {
+@@ -167,13 +277,13 @@ void Input::waitForButtonEvent(uint32 buttonEventMask, int32 timeout) {
  		do {
  			readInput();
  			_vm->_system->delayMillis(LOOP_RESOLUTION);
@@ -7679,7 +9019,7 @@ index 62534987..87aac515 100644
  	}
  
  }
-@@ -183,9 +292,10 @@ int Input::updateGameInput() {
+@@ -183,9 +293,10 @@ int Input::updateGameInput() {
  
  	int event = kEvNone;
  
@@ -7691,7 +9031,7 @@ index 62534987..87aac515 100644
  		(g_engineFlags & kEngineChangeLocation)) {
  
  		debugC(3, kDebugInput, "updateGameInput: input flags (mouse: %i, block: %i, walking: %i, changeloc: %i)",
-@@ -208,6 +318,10 @@ int Input::updateGameInput() {
+@@ -208,6 +319,10 @@ int Input::updateGameInput() {
  		if (_hasKeyPressEvent && (_vm->getFeatures() & GF_DEMO) == 0) {
  			if (_keyPressed.keycode == Common::KEYCODE_F5) event = kEvIngameMenu;
  		}
@@ -7702,7 +9042,7 @@ index 62534987..87aac515 100644
  	} else {
  		error("unsupported gametype in updateGameInput");
  	}
-@@ -237,6 +351,10 @@ int Input::updateInput() {
+@@ -237,6 +352,10 @@ int Input::updateInput() {
  		updateInventoryInput();
  		break;
  
@@ -7713,7 +9053,7 @@ index 62534987..87aac515 100644
  	default:
  		break;
  	}
-@@ -292,14 +410,26 @@ bool Input::translateGameInput() {
+@@ -292,14 +411,26 @@ bool Input::translateGameInput() {
  		return false;
  	}
  
@@ -7743,7 +9083,7 @@ index 62534987..87aac515 100644
  	if (_mouseButtons == kMouseRightDown) {
  		// right button down shows inventory
  		enterInventoryMode();
-@@ -309,9 +439,9 @@ bool Input::translateGameInput() {
+@@ -309,9 +440,9 @@ bool Input::translateGameInput() {
  	Common::Point mousePos;
  	getAbsoluteCursorPos(mousePos);
  	// test if mouse is hovering on an interactive zone for the currently selected inventory item
@@ -7755,7 +9095,7 @@ index 62534987..87aac515 100644
  		walkTo(mousePos);
  		return true;
  	}
-@@ -353,6 +483,10 @@ bool Input::translateGameInput() {
+@@ -353,6 +484,10 @@ bool Input::translateGameInput() {
  
  
  void Input::enterInventoryMode() {
@@ -7766,7 +9106,7 @@ index 62534987..87aac515 100644
  	Common::Point mousePos;
  	getAbsoluteCursorPos(mousePos);
  	bool hitCharacter = _vm->hitZone(kZoneYou, mousePos.x, mousePos.y);
-@@ -371,11 +505,41 @@ void Input::enterInventoryMode() {
+@@ -371,11 +506,41 @@ void Input::enterInventoryMode() {
  	_vm->openInventory();
  
  	_transCurrentHoverItem = -1;
@@ -7808,7 +9148,7 @@ index 62534987..87aac515 100644
  	// right up hides inventory
  	Common::Point mousePos;
  	getCursorPos(mousePos);
-@@ -393,6 +557,13 @@ void Input::exitInventoryMode() {
+@@ -393,6 +558,13 @@ void Input::exitInventoryMode() {
  			_vm->dropItem(z->u._mergeObj2);
  			_vm->addInventoryItem(z->u._mergeObj3);
  			_vm->_cmdExec->run(z->_commands);	// commands might set a new _inputMode
@@ -7822,7 +9162,7 @@ index 62534987..87aac515 100644
  		}
  
  	}
-@@ -416,8 +587,62 @@ void Input::exitInventoryMode() {
+@@ -416,8 +588,62 @@ void Input::exitInventoryMode() {
  	}
  }
  
@@ -7885,7 +9225,7 @@ index 62534987..87aac515 100644
  		exitInventoryMode();
  		return true;
  	}
-@@ -429,6 +654,7 @@ bool Input::updateInventoryInput() {
+@@ -429,6 +655,7 @@ bool Input::updateInventoryInput() {
  	if (_si != _transCurrentHoverItem) {
  		_transCurrentHoverItem = _si;
  		_vm->highlightInventoryItem(_si);						// enable
@@ -7893,7 +9233,7 @@ index 62534987..87aac515 100644
  	}
  
  	return true;
-@@ -508,6 +734,20 @@ void Input::initCursors() {
+@@ -508,6 +735,179 @@ void Input::initCursors() {
  
  }
  
@@ -7902,41 +9242,214 @@ index 62534987..87aac515 100644
 +	HDRenderer *hd = _vm->_gfx ? _vm->_gfx->_hd : nullptr;
 +	if (!hd) {
 +		CursorMan.replaceCursor(buf, w, h, hotX, hotY, keyColor);
++		_cursorCopy.free();
++		_cursorWhat = Common::String::format("original %ux%u", w, h);
 +		return;
 +	}
 +	int s = hd->scale();
 +	byte *scaled = hd->scaleIndexed(buf, w, h, w);
 +	Graphics::PixelFormat clut8 = Graphics::PixelFormat::createFormatCLUT8();
 +	CursorMan.replaceCursor(scaled, w * s, h * s, hotX * s, hotY * s, keyColor, &clut8);
++	// a copy for the autotest, with the current palette
++	Graphics::Surface copy;
++	copy.create(w * s, h * s, HDRenderer::cursorFormat());
++	for (uint i = 0; i < w * s * h * s; i++)
++		((uint32 *)copy.getPixels())[i] = scaled[i] == keyColor ? 0 : hd->paletteARGB(scaled[i]);
++	keepCursor(copy, "scaled");
++	copy.free();
 +	delete[] scaled;
++}
++
++void Input::keepCursor(const Graphics::Surface &argb, const char *what) {
++	_cursorCopy.copyFrom(argb);
++	_cursorWhat = what;
++	debugC(1, kDebugInput, "cursor %dx%d %s", argb.w, argb.h, what);
++}
++
++// the name of the original file of the current arrow (DosDisk_br::loadPointer)
++const char *Input::arrowName() const {
++	if (_mouseArrow && _mouseArrow == _dinoCursor)
++		return "pointer1";
++	if (_mouseArrow && _mouseArrow == _dougCursor)
++		return "pointer2";
++	if (_mouseArrow && _mouseArrow == _donnaCursor)
++		return "pointer3";
++	return nullptr;
++}
++
++// BRA with the HD renderer (not the original view): the arrow drawn again for HD, hd/<file>.png with alpha
++// (docs/formati.md), and with an object in hand its HD icon (hd/spr, the one of the inventory) over it
++// where the original puts the 51x51 icon. Without the picture (or a backend without alpha cursors) the
++// caller keeps the original pointer upscaled; an object without an HD icon is upscaled over the HD arrow.
++// The HD arrow if it can be shown now. The picture has fixed colours, the original pointer takes them from
++// the palette (the interface entries are grey in a few rooms, fades): the HD one is used only while the
++// palette has, for every entry of the original arrow, the colour the picture shows on most of its pixels
++// (taken at the centres of the original pixels, once per picture).
++const Graphics::Surface *Input::hdArrow() {
++	HDRenderer *hd = _vm->_gfx ? _vm->_gfx->_hd : nullptr;
++	const char *name = arrowName();
++	if (!hd || hd->classic() || !name || !g_system->hasFeature(OSystem::kFeatureCursorAlpha))
++		return nullptr;
++	Common::Rect r;
++	_mouseArrow->getRect(0, r);
++	const Graphics::Surface *arrow = hd->hdPicture(Common::String::format("%s.png", name), r.width(), r.height());
++	if (!arrow)
++		return nullptr;
++	const int s = hd->scale(), w = r.width(), h = r.height();
++	const byte *px = _mouseArrow->getData(0);
++	Common::HashMap<Common::String, Common::Array<uint32> >::iterator it = _arrowRef.find(name);
++	if (it == _arrowRef.end()) {
++		// per palette entry: the most frequent opaque colour at the centres of its pixels (0: none)
++		Common::Array<uint32> ref(256, 0);
++		for (int i = 1; i < 256; i++) {
++			Common::HashMap<uint32, int> votes;
++			int best = 0;
++			for (int y = 0; y < h; y++)
++				for (int x = 0; x < w; x++) {
++					if (px[y * w + x] != i)
++						continue;
++					uint32 c = *(const uint32 *)arrow->getBasePtr(x * s + s / 2, y * s + s / 2);
++					if ((c >> 24) != 255)
++						continue;
++					int v = ++votes[c];
++					if (v > best) {
++						best = v;
++						ref[i] = c;
++					}
++				}
++		}
++		_arrowRef[name] = ref;
++		it = _arrowRef.find(name);
++	}
++	for (int i = 1; i < 256; i++) {
++		uint32 a = it->_value[i];
++		if (!a)
++			continue;
++		uint32 b = hd->paletteARGB(i);
++		for (int sh = 0; sh < 24; sh += 8)
++			if (ABS((int)((a >> sh) & 0xff) - (int)((b >> sh) & 0xff)) > 4)
++				return nullptr;
++	}
++	return arrow;
++}
++
++void Input::paletteChanged() {
++	if (_gameType == GType_BRA && _mouseArrow && (hdArrow() != nullptr) != _cursorHD)
++		refreshCursor();
++}
++
++bool Input::setHDCursor(ItemName item) {
++	HDRenderer *hd = _vm->_gfx ? _vm->_gfx->_hd : nullptr;
++	const Graphics::Surface *arrow = hdArrow();
++	_cursorHD = arrow != nullptr;
++	if (!arrow)
++		return false;
++	const int s = hd->scale();
++	const char *what = "hd";
++	Graphics::Surface out;
++	if (!item) {
++		out.copyFrom(*arrow);
++	} else {
++		InventoryRenderer *ir = _vm->_inventoryRenderer;
++		if (!ir) {
++			_cursorHD = false;
++			return false;
++		}
++		out.create(_mouseComboProps_BR._width * s, _mouseComboProps_BR._height * s, HDRenderer::cursorFormat());
++		out.fillRect(Common::Rect(out.w, out.h), 0);
++		out.copyRectToSurface(*arrow, 0, 0, Common::Rect(MIN<int>(arrow->w, out.w), MIN<int>(arrow->h, out.h)));
++		const int iw = ir->itemWidth(), ih = ir->itemHeight();
++		Common::Array<byte> icon(iw * ih);
++		const byte *px = ir->itemPixels(item);
++		for (int y = 0; y < ih; y++)
++			memcpy(&icon[y * iw], px + y * ir->itemPitch(), iw);
++		const uint32 *hdIcon = hd->spriteImage(&icon[0], iw, ih, 0);
++		byte *scaled = hdIcon ? nullptr : hd->scaleIndexed(&icon[0], iw, ih, iw);
++		what = hdIcon ? "hd+hd-icon" : "hd+scaled-icon";
++		// the icon over the arrow (alpha not premultiplied)
++		const int ox = _mouseComboProps_BR._xOffset * s, oy = _mouseComboProps_BR._yOffset * s;
++		for (int y = 0; y < ih * s && oy + y < out.h; y++) {
++			uint32 *dp = (uint32 *)out.getBasePtr(ox, oy + y);
++			for (int x = 0; x < iw * s && ox + x < out.w; x++) {
++				uint32 c = hdIcon ? hdIcon[y * iw * s + x] : (scaled[y * iw * s + x] ? hd->paletteARGB(scaled[y * iw * s + x]) : 0);
++				uint32 a = c >> 24, d = dp[x], da = d >> 24;
++				if (a == 255 || !da) {
++					if (a)
++						dp[x] = c;
++					continue;
++				}
++				if (!a)
++					continue;
++				uint32 oa = a * 255 + da * (255 - a);	// alpha x 255
++				uint32 res = (oa / 255) << 24;
++				for (int sh = 0; sh < 24; sh += 8) {
++					uint32 cs = (c >> sh) & 0xff, cd = (d >> sh) & 0xff;
++					res |= ((cs * a * 255 + cd * da * (255 - a)) / oa) << sh;
++				}
++				dp[x] = res;
++			}
++		}
++		delete[] scaled;
++	}
++	Graphics::PixelFormat fmt = HDRenderer::cursorFormat();
++	CursorMan.replaceCursor(out.getPixels(), out.w, out.h, 0, 0, 0, &fmt);
++	keepCursor(out, what);
++	out.free();
++	return true;
++}
++
++void Input::refreshCursor() {
++	if (_gameType != GType_BRA || !_mouseArrow)
++		return;
++	if (_cursorItem) {
++		setInventoryCursor(_cursorItem);
++	} else if (!setHDCursor(0)) {
++		Common::Rect r;
++		_mouseArrow->getRect(0, r);
++		replaceCursor(_mouseArrow->getData(0), r.width(), r.height(), 0, 0, 0);
++	}
 +}
 +
  void Input::setArrowCursor() {
  
  	switch (_gameType) {
-@@ -522,7 +762,7 @@ void Input::setArrowCursor() {
+@@ -522,7 +922,9 @@ void Input::setArrowCursor() {
  	case GType_BRA: {
  		Common::Rect r;
  		_mouseArrow->getRect(0, r);
 -		CursorMan.replaceCursor(_mouseArrow->getData(0), r.width(), r.height(), 0, 0, 0);
-+		replaceCursor(_mouseArrow->getData(0), r.width(), r.height(), 0, 0, 0);
++		_cursorItem = 0;
++		if (!setHDCursor(0))
++			replaceCursor(_mouseArrow->getData(0), r.width(), r.height(), 0, 0, 0);
  		CursorMan.showMouse(true);
  		_activeItem._id = 0;
  		break;
-@@ -556,7 +796,7 @@ void Input::setInventoryCursor(ItemName name) {
+@@ -556,7 +958,9 @@ void Input::setInventoryCursor(ItemName name) {
  		for (uint y = 0; y < (uint)srcRect.height(); y++)
  			memcpy(dst + y * dstRect.width(), src + y * srcRect.width(), srcRect.width());
  		_vm->_inventoryRenderer->drawItem(name, dst + _mouseComboProps_BR._yOffset * _mouseComboProps_BR._width + _mouseComboProps_BR._xOffset, _mouseComboProps_BR._width);
 -		CursorMan.replaceCursor(dst, _mouseComboProps_BR._width, _mouseComboProps_BR._height, 0, 0, 0);
-+		replaceCursor(dst, _mouseComboProps_BR._width, _mouseComboProps_BR._height, 0, 0, 0);
++		_cursorItem = name;
++		if (!setHDCursor(name))
++			replaceCursor(dst, _mouseComboProps_BR._width, _mouseComboProps_BR._height, 0, 0, 0);
  		break;
  	}
  
 diff --git a/engines/parallaction/input.h b/engines/parallaction/input.h
-index e85d9b38..1ca11c2f 100644
+index e85d9b38..3ba820ae 100644
 --- a/engines/parallaction/input.h
 +++ b/engines/parallaction/input.h
-@@ -48,6 +48,8 @@ class Input {
+@@ -23,6 +23,9 @@
+ #define PARALLACTION_INPUT_H
+ 
+ #include "common/keyboard.h"
++#include "common/hashmap.h"
++#include "common/hash-str.h"
++#include "graphics/surface.h"
+ 
+ #include "parallaction/objects.h"
+ #include "parallaction/inventory.h"
+@@ -48,6 +51,8 @@ class Input {
  
  	bool		_hasKeyPressEvent;
  	Common::KeyState _keyPressed;
@@ -7945,7 +9458,7 @@ index e85d9b38..1ca11c2f 100644
  
  	bool		_hasDelayedAction;  // actived when the character needs to move before taking an action
  	ZonePtr		_delayedActionZone;
-@@ -64,11 +66,27 @@ class Input {
+@@ -64,11 +69,27 @@ class Input {
  
  	Common::Point	_mousePos;
  	uint16	_mouseButtons;
@@ -7973,7 +9486,24 @@ index e85d9b38..1ca11c2f 100644
  
  	int		_gameType;
  
-@@ -95,14 +113,21 @@ public:
+@@ -81,6 +102,16 @@ class Input {
+ 	Frames	*_donnaCursor;
+ 
+ 	void initCursors();
++	// BRA, HD: the pointer from the patch (hd/pointer1.png...) with the HD icon of the object in hand
++	ItemName	_cursorItem = 0;	// object in hand shown by the pointer (0: the arrow)
++	bool	setHDCursor(ItemName item);
++	const Graphics::Surface	*hdArrow();
++	bool	_cursorHD = false;	// the pointer shown is the one of the patch
++	Common::HashMap<Common::String, Common::Array<uint32> > _arrowRef;	// see hdArrow()
++	const char	*arrowName() const;
++	void	keepCursor(const Graphics::Surface &argb, const char *what);
++	Graphics::Surface	_cursorCopy;	// last pointer set in HD, ARGB (autotest: cursorshot)
++	Common::String	_cursorWhat;
+ 
+ public:
+ 	enum {
+@@ -95,14 +126,28 @@ public:
  	Input(Parallaction *vm);
  	virtual ~Input();
  
@@ -7983,6 +9513,13 @@ index e85d9b38..1ca11c2f 100644
 +
  	void getAbsoluteCursorPos(Common::Point& p) const;
 +	void replaceCursor(const byte *buf, uint w, uint h, int hotX, int hotY, uint32 keyColor);
++	// set the pointer again (the HD view switched with F8)
++	void refreshCursor();
++	// the palette changed: the HD pointer only while it has the colours it was drawn with
++	void paletteChanged();
++	// last pointer set with the HD renderer: ARGB at the HD scale, and how it was made (autotest)
++	const Graphics::Surface &cursorCopy() const { return _cursorCopy; }
++	const Common::String &cursorWhat() const { return _cursorWhat; }
  
  	void getCursorPos(Common::Point& p) const {
  		p = _mousePos;
@@ -7995,7 +9532,7 @@ index e85d9b38..1ca11c2f 100644
  	}
  
  	int				_inputMode;
-@@ -116,6 +141,7 @@ public:
+@@ -116,6 +161,7 @@ public:
  	bool	getLastKeyDown(uint16 &ascii);
  
  	void stopHovering();
@@ -8004,7 +9541,7 @@ index e85d9b38..1ca11c2f 100644
  	MouseTriState _mouseState;
  
 diff --git a/engines/parallaction/inventory.cpp b/engines/parallaction/inventory.cpp
-index 0789b2d6..0edc551b 100644
+index 0789b2d6..9a4f6803 100644
 --- a/engines/parallaction/inventory.cpp
 +++ b/engines/parallaction/inventory.cpp
 @@ -22,7 +22,9 @@
@@ -8017,7 +9554,22 @@ index 0789b2d6..0edc551b 100644
  
  namespace Parallaction {
  
-@@ -206,6 +208,10 @@ void InventoryRenderer::drawItem(ItemPosition pos, ItemName name) {
+@@ -98,10 +100,14 @@ void Parallaction::highlightInventoryItem(ItemPosition pos) {
+ }
+ 
+ int Parallaction::addInventoryItem(ItemName item) {
++	if (getGameType() == GType_BRA)
++		((Parallaction_br *)this)->markTaken(item);
+ 	return _inventory->addItem(item);
+ }
+ 
+ int Parallaction::addInventoryItem(ItemName item, uint32 value) {
++	if (getGameType() == GType_BRA)
++		((Parallaction_br *)this)->markTaken(item);
+ 	return _inventory->addItem(item, value);
+ }
+ 
+@@ -206,6 +212,10 @@ void InventoryRenderer::drawItem(ItemPosition pos, ItemName name) {
  	drawItem(name, d, _surf.pitch);
  }
  
@@ -8028,7 +9580,7 @@ index 0789b2d6..0edc551b 100644
  void InventoryRenderer::drawItem(ItemName name, byte *buffer, uint pitch) {
  	byte* s = _vm->_objects->getData(name);
  	byte* d = buffer;
-@@ -392,4 +398,106 @@ void Parallaction_br::destroyInventory() {
+@@ -392,4 +402,108 @@ void Parallaction_br::destroyInventory() {
  }
  
  
@@ -8040,13 +9592,15 @@ index 0789b2d6..0edc551b 100644
 +// An item without a name shows no label.
 +void Parallaction_br::loadInventoryNames() {
 +	_invNamesLoaded = true;
-+	static const char *const langs[] = { "it", "fr", "en", "ge" };
-+	uint lang = getInternLanguage();
-+	if (lang >= ARRAYSIZE(langs))
-+		return;
++	// only the game's language: without a file no labels, as in the original
++	Common::StringArray langs = braLanguageCodes(getInternLanguage());
 +	Common::File f;
-+	Common::String path = Common::String::format("text/inventario-%s.txt", langs[lang]);
-+	if (!f.open(Common::Path(path, '/')))
++	Common::String path;
++	for (uint i = 0; i < langs.size() && !f.isOpen(); i++) {
++		path = Common::String::format("text/inventario-%s.txt", langs[i].c_str());
++		f.open(Common::Path(path, '/'));
++	}
++	if (!f.isOpen())
 +		return;
 +	while (!f.eos() && !f.err()) {
 +		Common::String line = f.readLine();
@@ -8157,10 +9711,10 @@ index 651ab431..6a9d83f7 100644
  };
 diff --git a/engines/parallaction/manual.cpp b/engines/parallaction/manual.cpp
 new file mode 100644
-index 00000000..46117d3a
+index 00000000..7127579c
 --- /dev/null
 +++ b/engines/parallaction/manual.cpp
-@@ -0,0 +1,635 @@
+@@ -0,0 +1,639 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -8778,18 +10332,22 @@ index 00000000..46117d3a
 +};
 +
 +void Parallaction_br::showManual() {
-+	static const char *const langs[] = { "it", "fr", "en", "de" };
-+	uint lang = getInternLanguage();
-+	Common::StringArray pages = loadManualList(lang < ARRAYSIZE(langs) ? langs[lang] : "en");
-+	if (pages.empty())
-+		pages = loadManualList("en");
-+	for (uint i = 0; pages.empty() && i < ARRAYSIZE(langs); i++)
-+		pages = loadManualList(langs[i]);
++	// the game's language (German: de or ge), else English, else Italian
++	Common::StringArray langs = braLanguageCodes(getInternLanguage());
++	langs.push_back("en");
++	langs.push_back("it");
++	Common::StringArray pages;
++	uint used = 0;
++	for (; used < langs.size(); used++) {
++		pages = loadManualList(langs[used].c_str());
++		if (!pages.empty())
++			break;
++	}
 +	if (pages.empty()) {
 +		debug("MANUAL: no manual/<language>.txt");
 +		return;
 +	}
-+	debug("MANUAL: open, %u pages", pages.size());
++	debug("MANUAL: open manual/%s.txt, %u pages", langs[used].c_str(), pages.size());
 +	ManualDialog dlg(pages);
 +	runDialog(dlg);
 +	debug("MANUAL: closed");
@@ -8798,10 +10356,10 @@ index 00000000..46117d3a
 +} // End of namespace Parallaction
 diff --git a/engines/parallaction/menu_br.cpp b/engines/parallaction/menu_br.cpp
 new file mode 100644
-index 00000000..0bb52fc8
+index 00000000..622b0130
 --- /dev/null
 +++ b/engines/parallaction/menu_br.cpp
-@@ -0,0 +1,513 @@
+@@ -0,0 +1,563 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -8830,9 +10388,9 @@ index 00000000..0bb52fc8
 + *   Riprendi · Carica · Salva · Suggerimenti · Remastered ON/OFF · Impostazioni · Info · Esci
 + * Impostazioni: music, effects and voices volume, how the picture fills the screen, the on-screen
 + * shortcuts of the page, the Dropbox sync of the saves (asked to the host: menu_br.h).
-+ * Info: the game manual, the version, ScummVM's credits and licences.
++ * Info: the game manual, the version, the remaster's credits (credits.cpp), ScummVM's credits and licences.
 + * The windows have the rays of the app's loader behind their buttons. Layouts: the "bra" theme
-+ * (tools/web/tema_bra.py adds GlobalMenu.Hints/Remaster/Settings/Info, BraSettings, BraInfo).
++ * (tools/web/tema_bra.py adds GlobalMenu.Hints/Remaster/Settings/Info, BraSettings, BraInfo with Credits).
 + */
 +
 +#define FORBIDDEN_SYMBOL_ALLOW_ALL
@@ -8909,6 +10467,17 @@ index 00000000..0bb52fc8
 +#endif
 +}
 +
++// a launcher page or app runs the engine (it keeps the settings it passes on the command line)
++bool present() {
++#ifdef __EMSCRIPTEN__
++	return EM_ASM_INT({ return typeof window.braMotore === 'function' ? 1 : 0; }) != 0;
++#elif defined(POSIX)
++	return hosted();
++#else
++	return false;
++#endif
++}
++
 +Common::String dropboxState() {
 +#ifdef __EMSCRIPTEN__
 +	char *s = (char *)EM_ASM_PTR({
@@ -8953,12 +10522,25 @@ index 00000000..0bb52fc8
 +
 +/* ---------------- look ---------------- */
 +
-+static bool italian() {
-+	return !g_engine || ((Parallaction *)g_engine)->getInternLanguage() == 0;
++// the game's language (0 it, 1 fr, 2 en, 3 de)
++static uint gameLanguage() {
++	return g_engine ? ((Parallaction *)g_engine)->getInternLanguage() : 0;
 +}
 +
-+static Common::U32String T(const char *it, const char *en) {
-+	return Common::U32String(italian() ? it : en);
++static bool italian() {
++	return gameLanguage() == 0;
++}
++
++// the words of the game's own menus in the game's language (UTF-8); English when a language has none
++static Common::U32String T(const char *it, const char *en, const char *fr = nullptr, const char *de = nullptr) {
++	const char *t = en;
++	switch (gameLanguage()) {
++	case 0: t = it; break;
++	case 1: t = fr ? fr : en; break;
++	case 3: t = de ? de : en; break;
++	default: break;
++	}
++	return Common::U32String(t, Common::kUtf8);
 +}
 +
 +static void paintRays(Graphics::ManagedSurface &s, int w, int h) {
@@ -9015,6 +10597,7 @@ index 00000000..0bb52fc8
 +		kSpeechCmd = 'BSPE',
 +		kScreenCmd = 'BSCR',
 +		kShortcutsCmd = 'BSHO',
++		kDirectorsCutCmd = 'BDCU',
 +		kDropboxAutoCmd = 'BDBA',
 +		kDropboxSyncCmd = 'BDBS',
 +		kCloseCmd = 'BCLO'
@@ -9032,8 +10615,8 @@ index 00000000..0bb52fc8
 +	// is being built or shows what the host says
 +	bool _quiet = true;
 +
-+	GUI::SliderWidget *slider(const char *name, const char *it, const char *en, const char *key, uint32 cmd) {
-+		new GUI::StaticTextWidget(this, Common::String::format("BraSettings.%sText", name), T(it, en));
++	GUI::SliderWidget *slider(const char *name, const char *it, const char *en, const char *fr, const char *de, const char *key, uint32 cmd) {
++		new GUI::StaticTextWidget(this, Common::String::format("BraSettings.%sText", name), T(it, en, fr, de));
 +		GUI::SliderWidget *s = new GUI::SliderWidget(this, Common::String::format("BraSettings.%sSlider", name), Common::U32String(), cmd);
 +		s->setMinValue(0);
 +		s->setMaxValue(Audio::Mixer::kMaxMixerVolume);
@@ -9083,10 +10666,9 @@ index 00000000..0bb52fc8
 +		}
 +		bool ok = p.size() == 3;
 +		bool linked = ok && p[0] == "1", automatic = ok && p[1] == "1", busy = ok && p[2] == "1";
-+		Common::String text = ok ? rest : Common::String(italian()
-+			? "Non disponibile qui."
-+			: "Not available here.");
-+		_dropboxText->setLabel(Common::U32String(text, Common::kUtf8));
++		Common::U32String text = ok ? Common::U32String(rest, Common::kUtf8)
++			: T("Non disponibile qui.", "Not available here.", "Non disponible ici.", "Hier nicht verfügbar.");
++		_dropboxText->setLabel(text);
 +		bool q = _quiet;
 +		_quiet = true;
 +		_dropboxAuto->setState(linked && automatic);
@@ -9098,30 +10680,38 @@ index 00000000..0bb52fc8
 +
 +public:
 +	BraSettingsDialog(Engine *engine) : RaysDialog("BraSettings"), _engine(engine) {
-+		new GUI::StaticTextWidget(this, "BraSettings.Title", T("Impostazioni", "Settings"));
++		new GUI::StaticTextWidget(this, "BraSettings.Title", T("Impostazioni", "Settings", "Paramètres", "Einstellungen"));
 +
-+		slider("Music", "Musica", "Music", "music_volume", kMusicCmd);
-+		slider("Sfx", "Effetti", "Effects", "sfx_volume", kSfxCmd);
-+		slider("Speech", "Voci", "Voices", "speech_volume", kSpeechCmd);
++		slider("Music", "Musica", "Music", "Musique", "Musik", "music_volume", kMusicCmd);
++		slider("Sfx", "Effetti", "Effects", "Effets", "Effekte", "sfx_volume", kSfxCmd);
++		slider("Speech", "Voci", "Voices", "Voix", "Stimmen", "speech_volume", kSpeechCmd);
 +
-+		new GUI::StaticTextWidget(this, "BraSettings.ScreenText", T("Schermo", "Screen"));
++		new GUI::StaticTextWidget(this, "BraSettings.ScreenText", T("Schermo", "Screen", "Écran", "Bildschirm"));
 +		_screen = new GUI::RadiobuttonGroup(this, kScreenCmd);
-+		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFit", _screen, kFit, T("Proporzioni originali (bande nere)", "Original proportions (black bands)"));
-+		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFill", _screen, kFill, T("Riempi lo schermo (taglia i bordi)", "Fill the screen (crops the edges)"));
-+		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenStretch", _screen, kStretch, T("Allarga", "Stretch"));
++		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFit", _screen, kFit, T("Proporzioni originali (bande nere)", "Original proportions (black bands)", "Proportions d'origine (bandes noires)", "Originalformat (schwarze Balken)"));
++		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFill", _screen, kFill, T("Riempi lo schermo (taglia i bordi)", "Fill the screen (crops the edges)", "Remplir l'écran (rogne les bords)", "Bildschirm füllen (Ränder abgeschnitten)"));
++		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenStretch", _screen, kStretch, T("Allarga", "Stretch", "Étirer", "Strecken"));
 +		Common::String mode = ConfMan.hasKey("stretch_mode") ? ConfMan.get("stretch_mode") : "fit";
 +		_screen->setValue(mode == "fill" ? kFill : mode == "stretch" ? kStretch : kFit);
 +
 +		GUI::CheckboxWidget *sc = new GUI::CheckboxWidget(this, "BraSettings.Shortcuts",
-+			T("Pulsanti rapidi sullo schermo", "Quick buttons on screen"), Common::U32String(), kShortcutsCmd);
++			T("Pulsanti rapidi sullo schermo", "Quick buttons on screen", "Boutons rapides à l'écran", "Schnelltasten auf dem Bildschirm"), Common::U32String(), kShortcutsCmd);
 +		sc->setState(!ConfMan.hasKey("bra_scorciatoie") || ConfMan.getBool("bra_scorciatoie"));
 +
-+		new GUI::StaticTextWidget(this, "BraSettings.DropboxTitle", T("Salvataggi su Dropbox", "Saves on Dropbox"));
-+		_dropboxText = new GUI::StaticTextWidget(this, "BraSettings.DropboxText", Common::U32String(), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
-+		_dropboxAuto = new GUI::CheckboxWidget(this, "BraSettings.DropboxAuto", T("Sincronizza da solo", "Sync automatically"), Common::U32String(), kDropboxAutoCmd);
-+		_dropboxSync = new GUI::ButtonWidget(this, "BraSettings.DropboxSync", T("Sincronizza ora", "Sync now"), Common::U32String(), kDropboxSyncCmd);
++		// the launcher's game option (game domain); a change counts from the next location
++		GUI::CheckboxWidget *dc = new GUI::CheckboxWidget(this, "BraSettings.DirectorsCut",
++			Common::U32String("Director's Cut"), T("Scene e battute tagliate dall'originale (dalla stanza successiva)",
++			"Scenes and lines cut from the original (from the next location)",
++			"Scènes et répliques coupées de l'original (dès le lieu suivant)",
++			"Aus dem Original geschnittene Szenen und Sätze (ab dem nächsten Ort)"), kDirectorsCutCmd);
++		dc->setState(braSettingOn("bra_directors_cut"));
 +
-+		new GUI::ButtonWidget(this, "BraSettings.Close", T("Fatto", "Done"), Common::U32String(), kCloseCmd);
++		new GUI::StaticTextWidget(this, "BraSettings.DropboxTitle", T("Salvataggi su Dropbox", "Saves on Dropbox", "Sauvegardes sur Dropbox", "Spielstände auf Dropbox"));
++		_dropboxText = new GUI::StaticTextWidget(this, "BraSettings.DropboxText", Common::U32String(), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
++		_dropboxAuto = new GUI::CheckboxWidget(this, "BraSettings.DropboxAuto", T("Sincronizza da solo", "Sync automatically", "Synchroniser automatiquement", "Automatisch synchronisieren"), Common::U32String(), kDropboxAutoCmd);
++		_dropboxSync = new GUI::ButtonWidget(this, "BraSettings.DropboxSync", T("Sincronizza ora", "Sync now", "Synchroniser maintenant", "Jetzt synchronisieren"), Common::U32String(), kDropboxSyncCmd);
++
++		new GUI::ButtonWidget(this, "BraSettings.Close", T("Fatto", "Done", "OK", "Fertig"), Common::U32String(), kCloseCmd);
 +		_quiet = false;
 +	}
 +
@@ -9152,6 +10742,15 @@ index 00000000..0bb52fc8
 +			ConfMan.setBool("bra_scorciatoie", data != 0, Common::ConfigManager::kApplicationDomain);
 +			Host::send(data ? "scorciatoie 1" : "scorciatoie 0");
 +			break;
++		case kDirectorsCutCmd:
++			// with a launcher (app, web page) the setting is its own (command line, transient domain): this session
++			// only, and the launcher is told to keep it; with ScummVM alone, the game's option of the launcher
++			if (Host::present() || ConfMan.getDomain(Common::ConfigManager::kTransientDomain)->contains("bra_directors_cut"))
++				ConfMan.setBool("bra_directors_cut", data != 0, Common::ConfigManager::kTransientDomain);
++			else
++				ConfMan.setBool("bra_directors_cut", data != 0, ConfMan.getActiveDomainName());
++			Host::send(data ? "directors-cut 1" : "directors-cut 0");
++			break;
 +		case kDropboxAutoCmd:
 +			Host::send(data ? "dropbox-auto 1" : "dropbox-auto 0");
 +			break;
@@ -9177,12 +10776,13 @@ index 00000000..0bb52fc8
 +/* ---------------- info ---------------- */
 +
 +class BraInfoDialog : public RaysDialog {
-+	enum { kManualCmd = 'BMAN', kAboutCmd = 'BABO', kBackCmd = 'BBAC' };
++	enum { kManualCmd = 'BMAN', kCreditsCmd = 'BCRE', kAboutCmd = 'BABO', kBackCmd = 'BBAC' };
++	Parallaction_br *_vm;
 +
 +public:
 +	bool _manual = false;
 +
-+	BraInfoDialog() : RaysDialog("BraInfo") {
++	BraInfoDialog(Parallaction_br *vm) : RaysDialog("BraInfo"), _vm(vm) {
 +		new GUI::StaticTextWidget(this, "BraInfo.Title", Common::U32String("The Big Red Adventure"));
 +		Common::String patch;
 +		Common::File f;
@@ -9195,10 +10795,13 @@ index 00000000..0bb52fc8
 +		new GUI::StaticTextWidget(this, "BraInfo.Patch",
 +			Common::U32String(patch.empty() ? Common::String("Remaster") : "Remaster - patch " + patch), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
 +		new GUI::StaticTextWidget(this, "BraInfo.Engine",
-+			Common::U32String(Common::String::format("%s %s", italian() ? "Motore: ScummVM" : "Engine: ScummVM", gScummVMVersion)), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
-+		new GUI::ButtonWidget(this, "BraInfo.Manual", T("Manuale del gioco", "Game manual"), Common::U32String(), kManualCmd);
-+		new GUI::ButtonWidget(this, "BraInfo.About", T("ScummVM e licenze", "ScummVM and licences"), Common::U32String(), kAboutCmd);
-+		new GUI::ButtonWidget(this, "BraInfo.Back", T("Indietro", "Back"), Common::U32String(), kBackCmd);
++			T("Motore: ScummVM ", "Engine: ScummVM ", "Moteur : ScummVM ", "Engine: ScummVM ") + Common::U32String(gScummVMVersion), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
++		new GUI::ButtonWidget(this, "BraInfo.Manual", T("Manuale del gioco", "Game manual", "Manuel du jeu", "Spielhandbuch"), Common::U32String(), kManualCmd);
++		// the remaster's credits (crediti/<language>.txt of the patch), when there are
++		if (_vm->hasCredits("crediti"))
++			new GUI::ButtonWidget(this, "BraInfo.Credits", T("Crediti del remaster", "Remaster credits", "Crédits du remaster", "Remaster-Credits"), Common::U32String(), kCreditsCmd);
++		new GUI::ButtonWidget(this, "BraInfo.About", T("ScummVM e licenze", "ScummVM and licences", "ScummVM et licences", "ScummVM und Lizenzen"), Common::U32String(), kAboutCmd);
++		new GUI::ButtonWidget(this, "BraInfo.Back", T("Indietro", "Back", "Retour", "Zurück"), Common::U32String(), kBackCmd);
 +	}
 +
 +	void handleCommand(GUI::CommandSender *sender, uint32 cmd, uint32 data) override {
@@ -9206,6 +10809,9 @@ index 00000000..0bb52fc8
 +		case kManualCmd:
 +			_manual = true;
 +			close();
++			break;
++		case kCreditsCmd:
++			_vm->showCredits("crediti");
 +			break;
 +		case kAboutCmd: {
 +			GUI::AboutDialog about(true);
@@ -9239,14 +10845,14 @@ index 00000000..0bb52fc8
 +
 +public:
 +	BraMenuDialog(Parallaction_br *vm) : MainMenuDialog(vm, false), _vm(vm) {
-+		new GUI::ButtonWidget(this, "GlobalMenu.Resume", T("Riprendi", "Resume"), Common::U32String(), kPlayCmd);
-+		new GUI::ButtonWidget(this, "GlobalMenu.Load", T("Carica", "Load"), Common::U32String(), kLoadCmd);
-+		new GUI::ButtonWidget(this, "GlobalMenu.Save", T("Salva", "Save"), Common::U32String(), kSaveCmd);
-+		_hints = new GUI::ButtonWidget(this, "GlobalMenu.Hints", T("Suggerimenti", "Hints"), Common::U32String(), kHintsCmd);
++		new GUI::ButtonWidget(this, "GlobalMenu.Resume", T("Riprendi", "Resume", "Reprendre", "Fortsetzen"), Common::U32String(), kPlayCmd);
++		new GUI::ButtonWidget(this, "GlobalMenu.Load", T("Carica", "Load", "Charger", "Laden"), Common::U32String(), kLoadCmd);
++		new GUI::ButtonWidget(this, "GlobalMenu.Save", T("Salva", "Save", "Sauvegarder", "Speichern"), Common::U32String(), kSaveCmd);
++		_hints = new GUI::ButtonWidget(this, "GlobalMenu.Hints", T("Suggerimenti", "Hints", "Aide", "Tipps"), Common::U32String(), kHintsCmd);
 +		_remaster = new GUI::ButtonWidget(this, "GlobalMenu.Remaster", Common::U32String("Remastered: ON"), Common::U32String(), kRemasterCmd);
-+		new GUI::ButtonWidget(this, "GlobalMenu.Settings", T("Impostazioni", "Settings"), Common::U32String(), kSettingsCmd);
++		new GUI::ButtonWidget(this, "GlobalMenu.Settings", T("Impostazioni", "Settings", "Paramètres", "Einstellungen"), Common::U32String(), kSettingsCmd);
 +		new GUI::ButtonWidget(this, "GlobalMenu.Info", Common::U32String("Info"), Common::U32String(), kInfoCmd);
-+		new GUI::ButtonWidget(this, "GlobalMenu.Quit", T("Esci", "Quit"), Common::U32String(), kExitCmd);
++		new GUI::ButtonWidget(this, "GlobalMenu.Quit", T("Esci", "Quit", "Quitter", "Beenden"), Common::U32String(), kExitCmd);
 +	}
 +
 +	void open() override {
@@ -9285,7 +10891,7 @@ index 00000000..0bb52fc8
 +			break;
 +		}
 +		case kInfoCmd: {
-+			BraInfoDialog d;
++			BraInfoDialog d(_vm);
 +			d.runModal();
 +			if (d._manual && (_vm->getFeatures() & GF_DEMO) == 0) {
 +				_vm->_input->requestManual();
@@ -9295,7 +10901,9 @@ index 00000000..0bb52fc8
 +		}
 +		case kExitCmd: {
 +			GUI::MessageDialog ask(T("Uscire dal gioco? Quello che non hai salvato andrà perso.",
-+				"Quit the game? Anything you have not saved will be lost."), T("Esci", "Quit"), T("Annulla", "Cancel"));
++				"Quit the game? Anything you have not saved will be lost.",
++				"Quitter le jeu ? Tout ce qui n'a pas été sauvegardé sera perdu.",
++				"Spiel beenden? Alles, was du nicht gespeichert hast, geht verloren."), T("Esci", "Quit", "Quitter", "Beenden"), T("Annulla", "Cancel", "Annuler", "Abbrechen"));
 +			if (ask.runModal() == GUI::kMessageOK) {
 +				Common::Event e;
 +				e.type = Common::EVENT_QUIT;
@@ -9317,10 +10925,10 @@ index 00000000..0bb52fc8
 +} // End of namespace Parallaction
 diff --git a/engines/parallaction/menu_br.h b/engines/parallaction/menu_br.h
 new file mode 100644
-index 00000000..1a3aac34
+index 00000000..4a37437a
 --- /dev/null
 +++ b/engines/parallaction/menu_br.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,53 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -9363,6 +10971,8 @@ index 00000000..1a3aac34
 +// commands to it and the state of its Dropbox sync. Without one, nothing happens and the state is empty.
 +namespace Host {
 +void send(const Common::String &cmd);
++// true when a launcher runs the engine (window.braMotore on the web, BRA_HOST=1 for the native engine)
++bool present();
 +// "linked\tauto\tbusy\ttext" (0/1 flags, a sentence for the player), or "" with no host or no Dropbox
 +Common::String dropboxState();
 +// the settings the page has to know at the start (on-screen shortcuts)
@@ -9373,7 +10983,7 @@ index 00000000..1a3aac34
 +
 +#endif
 diff --git a/engines/parallaction/metaengine.cpp b/engines/parallaction/metaengine.cpp
-index 70adce01..686fd42c 100644
+index 70adce01..00351d7a 100644
 --- a/engines/parallaction/metaengine.cpp
 +++ b/engines/parallaction/metaengine.cpp
 @@ -33,6 +33,12 @@
@@ -9389,7 +10999,7 @@ index 70adce01..686fd42c 100644
  
  namespace Parallaction {
  
-@@ -43,9 +49,41 @@ Common::Platform Parallaction::getPlatform() const { return _gameDescription->de
+@@ -43,9 +49,52 @@ Common::Platform Parallaction::getPlatform() const { return _gameDescription->de
  
  } // End of namespace Parallaction
  
@@ -9419,6 +11029,17 @@ index 70adce01..686fd42c 100644
 +		}
 +	},
 +	{
++		GAMEOPTION_DIRECTORS_CUT,
++		{
++			_s("Director's Cut"),
++			_s("Restore the scenes and lines cut from the original game (from the patch); a change counts from the next location"),
++			"bra_directors_cut",
++			true,
++			0,
++			0
++		}
++	},
++	{
 +		GAMEOPTION_UNLOCK_PARTS,
 +		{
 +			_s("Unlock all parts"),
@@ -9433,7 +11054,7 @@ index 70adce01..686fd42c 100644
  	{
  		GAMEOPTION_TTS,
  		{
-@@ -57,29 +95,26 @@ static const ADExtraGuiOptionsMap optionsList[] = {
+@@ -57,29 +106,26 @@ static const ADExtraGuiOptionsMap optionsList[] = {
  			0
  		}
  	},
@@ -9465,7 +11086,7 @@ index 70adce01..686fd42c 100644
  	int getMaximumSaveSlot() const override;
  	bool removeSaveState(const char *target, int slot) const override;
  	Common::String getSavegameFile(int saveGameIdx, const char *target) const override {
-@@ -91,16 +126,32 @@ public:
+@@ -91,16 +137,32 @@ public:
  		else
  			return prefix + Common::String::format(".%03d", saveGameIdx);
  	}
@@ -9499,7 +11120,7 @@ index 70adce01..686fd42c 100644
  	return
  		(f == kSupportsReturnToLauncher);
  }
-@@ -160,8 +211,10 @@ Common::KeymapArray ParallactionMetaEngine::initKeymaps(const char *target) cons
+@@ -160,8 +222,10 @@ Common::KeymapArray ParallactionMetaEngine::initKeymaps(const char *target) cons
  		act->addDefaultInputMapping("JOY_RIGHT_SHOULDER");
  		engineKeymap->addAction(act);
  	} else if (gameId == "bra") {
@@ -9511,7 +11132,7 @@ index 70adce01..686fd42c 100644
  		act->addDefaultInputMapping("F5");
  		act->addDefaultInputMapping("JOY_LEFT_SHOULDER");
  		engineKeymap->addAction(act);
-@@ -207,6 +260,48 @@ SaveStateList ParallactionMetaEngine::listSaves(const char *target) const {
+@@ -207,6 +271,50 @@ SaveStateList ParallactionMetaEngine::listSaves(const char *target) const {
  	return saveList;
  }
  
@@ -9524,13 +11145,15 @@ index 70adce01..686fd42c 100644
 +	thumb->fillRect(Common::Rect(thumb->w, thumb->h), thumb->format.RGBToColor(40, 9, 12));
 +	thumb->frameRect(Common::Rect(thumb->w, thumb->h), thumb->format.RGBToColor(120, 22, 28));
 +#ifdef USE_TRANSLATION
-+	bool it = TransMan.getCurrentLanguage().hasPrefix("it");
++	Common::String lang = TransMan.getCurrentLanguage();
 +#else
-+	bool it = false;
++	Common::String lang;
 +#endif
++	const char *none = lang.hasPrefix("it") ? "Nessuna immagine" : lang.hasPrefix("fr") ? "Pas d'image"
++		: lang.hasPrefix("de") ? "Kein Bild" : "No picture";
 +	const Graphics::Font *font = FontMan.getFontByUsage(Graphics::FontManager::kGUIFont);
 +	if (font)
-+		font->drawString(thumb, it ? "Nessuna immagine" : "No picture", 0, (thumb->h - font->getFontHeight()) / 2,
++		font->drawString(thumb, none, 0, (thumb->h - font->getFontHeight()) / 2,
 +			thumb->w, thumb->format.RGBToColor(200, 180, 150), Graphics::kTextAlignCenter);
 +	return thumb;
 +}
@@ -9561,10 +11184,10 @@ index 70adce01..686fd42c 100644
  
  bool ParallactionMetaEngine::removeSaveState(const char *target, int slot) const {
 diff --git a/engines/parallaction/module.mk b/engines/parallaction/module.mk
-index 3ad5b48b..10f67ea4 100644
+index 3ad5b48b..c84274ce 100644
 --- a/engines/parallaction/module.mk
 +++ b/engines/parallaction/module.mk
-@@ -2,6 +2,7 @@ MODULE := engines/parallaction
+@@ -2,9 +2,11 @@ MODULE := engines/parallaction
  
  MODULE_OBJS := \
  	adlib.o \
@@ -9572,7 +11195,11 @@ index 3ad5b48b..10f67ea4 100644
  	balloons.o \
  	callables_br.o \
  	callables_ns.o \
-@@ -17,7 +18,11 @@ MODULE_OBJS := \
++	credits.o \
+ 	debug.o \
+ 	dialogue.o \
+ 	disk_br.o \
+@@ -17,7 +19,11 @@ MODULE_OBJS := \
  	graphics.o \
  	gui.o \
  	gui_br.o \
@@ -9652,7 +11279,7 @@ index d3121765..10de64e0 100644
  	~Animation() override;
  	uint16 getFrameNum() const;
 diff --git a/engines/parallaction/parallaction.cpp b/engines/parallaction/parallaction.cpp
-index 9d8a504d..0f8b817f 100644
+index 9d8a504d..533fcb65 100644
 --- a/engines/parallaction/parallaction.cpp
 +++ b/engines/parallaction/parallaction.cpp
 @@ -22,8 +22,13 @@
@@ -9867,18 +11494,20 @@ index 9d8a504d..0f8b817f 100644
  }
  
  void Parallaction::runGame() {
-@@ -330,6 +473,10 @@ void Parallaction::runGame() {
+@@ -330,6 +473,12 @@ void Parallaction::runGame() {
  	if (shouldQuit())
  		return;
  
 +	// BRA: CD audio housekeeping (end of a track, looping a track resumed from the middle)
-+	if (getGameType() == GType_BRA)
++	if (getGameType() == GType_BRA) {
 +		((Parallaction_br *)this)->updateSound();
++		((Parallaction_br *)this)->updateCreditsRoll();
++	}
 +
  	// change this to endFrame?
  	updateView();
  }
-@@ -418,14 +565,33 @@ void Parallaction::drawAnimation(AnimationPtr anim) {
+@@ -418,14 +567,33 @@ void Parallaction::drawAnimation(AnimationPtr anim) {
  		break;
  
  	case GType_BRA:
@@ -9920,7 +11549,7 @@ index 9d8a504d..0f8b817f 100644
  		}
  		break;
  
-@@ -438,12 +604,71 @@ void Parallaction::drawAnimation(AnimationPtr anim) {
+@@ -438,12 +606,71 @@ void Parallaction::drawAnimation(AnimationPtr anim) {
  	obj->frame = anim->getF();
  	obj->x = anim->getX();
  	obj->y = anim->getY();
@@ -9992,7 +11621,7 @@ index 9d8a504d..0f8b817f 100644
  void Parallaction::drawZone(ZonePtr zone) {
  	if (!zone) {
  		return;
-@@ -542,6 +767,8 @@ void Parallaction::enterCommentMode(ZonePtr z) {
+@@ -542,6 +769,8 @@ void Parallaction::enterCommentMode(ZonePtr z) {
  		}
  	} else
  	if (_gameType == GType_BRA) {
@@ -10001,7 +11630,7 @@ index 9d8a504d..0f8b817f 100644
  		_balloonMan->setSingleBalloon(data->_examineText, 0, 0, 1, BalloonManager::kNormalColor);
  		_gfx->setItem(_char._talk, 10, 80);
  	}
-@@ -598,7 +825,13 @@ void Parallaction::runZone(ZonePtr z) {
+@@ -598,7 +827,13 @@ void Parallaction::runZone(ZonePtr z) {
  			_soundMan->execute(SC_SETSFXCHANNEL, z->u._hearChannel);
  			_soundMan->execute(SC_SETSFXLOOPING, (int)((z->_flags & kFlagsLooping) == kFlagsLooping));
  			_soundMan->execute(SC_SETSFXVOLUME, 60);
@@ -10015,7 +11644,7 @@ index 9d8a504d..0f8b817f 100644
  		}
  		break;
  
-@@ -706,6 +939,12 @@ bool Parallaction::checkZoneType(ZonePtr z, uint32 type) {
+@@ -706,6 +941,12 @@ bool Parallaction::checkZoneType(ZonePtr z, uint32 type) {
  			if (ACTIONTYPE(z) == kZoneDoor) {
  				return true;
  			}
@@ -10028,7 +11657,7 @@ index 9d8a504d..0f8b817f 100644
  		}
  	}
  
-@@ -857,6 +1096,283 @@ void Parallaction::setTTSVoice(int id) const {
+@@ -857,6 +1098,302 @@ void Parallaction::setTTSVoice(int id) const {
  #endif
  }
  
@@ -10046,15 +11675,34 @@ index 9d8a504d..0f8b817f 100644
 +	return Common::String::format("%08x", crc ^ 0xffffffff);
 +}
 +
++bool braSettingOn(const char *key) {
++	return !ConfMan.hasKey(key) || ConfMan.getBool(key);
++}
++
++Common::StringArray braLanguageCodes(uint lang) {
++	static const char *const codes[] = { "it", "fr", "en", "de" };
++	Common::StringArray out;
++	if (lang < ARRAYSIZE(codes))
++		out.push_back(codes[lang]);
++	if (lang == kGerman)
++		out.push_back("ge");
++	return out;
++}
++
 +void Parallaction::loadTextFixes() {
 +	_textFixesLoaded = true;
-+	static const char *const langs[] = { "it", "fr", "en", "ge" };
-+	uint lang = getInternLanguage();
-+	if (lang >= ARRAYSIZE(langs))
-+		return;
++	// only the game's language: without a file the original texts stay
++	Common::StringArray langs = braLanguageCodes(getInternLanguage());
 +	Common::File f;
-+	if (!f.open(Common::Path(Common::String::format("text/%s.txt", langs[lang]), '/')))
++	Common::String path;
++	for (uint i = 0; i < langs.size() && !f.isOpen(); i++) {
++		path = Common::String::format("text/%s.txt", langs[i].c_str());
++		f.open(Common::Path(path, '/'));
++	}
++	if (!f.isOpen()) {
++		debugC(1, kDebugParser, "no text/<language>.txt for language %u: original texts", getInternLanguage());
 +		return;
++	}
 +	while (!f.eos() && !f.err()) {
 +		Common::String line = f.readLine();
 +		if (line.empty() || line[0] == '#')
@@ -10067,7 +11715,7 @@ index 9d8a504d..0f8b817f 100644
 +		Common::U32String u(line.substr(9).c_str(), Common::kUtf8);
 +		_textFixes[key] = u.encode(Common::kDos850);
 +	}
-+	debugC(1, kDebugParser, "%d corrected texts loaded", _textFixes.size());
++	debugC(1, kDebugParser, "%s: %d corrected texts loaded", path.c_str(), _textFixes.size());
 +}
 +
 +void Parallaction::loadDialogueFixes() {
@@ -10128,8 +11776,8 @@ index 9d8a504d..0f8b817f 100644
 +	return bitmapFontSpelling(it->_value);
 +}
 +
-+Common::String Parallaction::bitmapFontSpelling(const Common::String &t) {
-+	if (hdTextActive())
++Common::String Parallaction::bitmapFontSpelling(const Common::String &t, bool always) {
++	if (hdTextActive() && !always)
 +		return t;
 +	// The original bitmap fonts (_braDosFullCharMap) have the lowercase accented letters but ì and ó,
 +	// and no accented capitals: fall back to the old spelling of the original scripts, base letter
@@ -10313,7 +11961,7 @@ index 9d8a504d..0f8b817f 100644
  	Common::TextToSpeechManager *ttsMan = g_system->getTextToSpeechManager();
  	if (ttsMan != nullptr && ConfMan.getBool("tts_enabled") && ttsMan->isSpeaking()) {
 diff --git a/engines/parallaction/parallaction.h b/engines/parallaction/parallaction.h
-index abfeacc9..78fd23f5 100644
+index abfeacc9..63182efd 100644
 --- a/engines/parallaction/parallaction.h
 +++ b/engines/parallaction/parallaction.h
 @@ -23,6 +23,10 @@
@@ -10345,7 +11993,20 @@ index abfeacc9..78fd23f5 100644
  };
  
  enum LanguageIndex {
-@@ -314,11 +320,36 @@ enum PlayableCharacterVoiceID {
+@@ -98,6 +104,12 @@ enum LanguageIndex {
+ extern uint32		g_engineFlags;
+ extern char			g_saveData1[];
+ extern uint32		g_globalFlags;
++
++// a boolean setting of the remaster that is on when absent (bra_directors_cut...)
++bool braSettingOn(const char *key);
++// the codes of the game's language in the file names of the patch (text/<code>.txt...): it, fr, en, and
++// for German de and ge
++Common::StringArray braLanguageCodes(uint lang);
+ extern const char	*g_dinoName;
+ extern const char	*g_donnaName;
+ extern const char	*g_doughName;
+@@ -314,11 +326,37 @@ enum PlayableCharacterVoiceID {
  static const int kNarratorVoiceID = 0;
  
  class SaveLoad;
@@ -10365,6 +12026,7 @@ index abfeacc9..78fd23f5 100644
 +	bool _jitter = false;
 +	int _jitterX = 0, _jitterY = 0, _jitterN = 0;
 +	void screenshot(const Common::String &file);
++	void cursorShot(const Common::String &file, const Common::String &screenFile);
 +	Parallaction *_vm;
 +	Common::List<Common::String> _lines;
 +	int _wait;
@@ -10382,7 +12044,7 @@ index abfeacc9..78fd23f5 100644
  
  public:
  	int getGameType() const;
-@@ -410,6 +441,16 @@ protected:
+@@ -410,6 +448,16 @@ protected:
  	void	enterCommentMode(ZonePtr z);
  	void	exitCommentMode();
  	void	updateView();
@@ -10399,7 +12061,7 @@ index abfeacc9..78fd23f5 100644
  	void	drawAnimation(AnimationPtr anim);
  	void	drawZone(ZonePtr zone);
  	void	updateZones();
-@@ -426,6 +467,10 @@ public:
+@@ -426,6 +474,10 @@ public:
  	uint	getInternLanguage();
  	void	setInternLanguage(uint id);
  	void	enterDialogueMode(ZonePtr z);
@@ -10410,7 +12072,7 @@ index abfeacc9..78fd23f5 100644
  	void	scheduleLocationSwitch(const char *location);
  	void	showSlide(const char *name, int x = 0, int y = 0);
  
-@@ -457,16 +502,76 @@ public:
+@@ -457,16 +509,77 @@ public:
  	void		setTTSVoice(int id) const;
  	void		stopTextToSpeech() const;
  
@@ -10438,7 +12100,8 @@ index abfeacc9..78fd23f5 100644
 +	Common::String fixText(const Common::String &text);
 +	// a text in the game's code page as the current fonts can show it (no HD fonts: accented
 +	// letters missing from the bitmap fonts become base letter + apostrophe, È -> E', ì -> i')
-+	static Common::String bitmapFontSpelling(const Common::String &text);
++	// always: also while the HD fonts are on (texts drawn with the bitmap fonts anyway, credits.cpp)
++	static Common::String bitmapFontSpelling(const Common::String &text, bool always = false);
 +	void		loadTextFixes();
 +	Common::HashMap<Common::String, Common::String> _textFixes;
 +	bool		_textFixesLoaded = false;
@@ -10487,7 +12150,7 @@ index abfeacc9..78fd23f5 100644
  };
  
  
-@@ -585,7 +690,27 @@ private:
+@@ -585,7 +698,29 @@ private:
  
  #define NUM_ZONES	100
  
@@ -10508,6 +12171,8 @@ index abfeacc9..78fd23f5 100644
 +	Common::Array<uint32> zoneFlags;		// NUM_LOCATIONS * NUM_ZONES
 +	Common::Array<InventoryItem> inventories[3];	// dino, donna, doug
 +	Common::String musicFile;
++	Common::StringArray partFlags;			// "<part>:<flag>" remembered for later parts (loc/flag-parti.txt)
++	Common::Array<uint16> takenItems;		// items taken at least once in this part (PRESO: of the hints)
 +};
 +
  class Parallaction_br : public Parallaction {
@@ -10515,7 +12180,7 @@ index abfeacc9..78fd23f5 100644
  
  public:
  	Parallaction_br(OSystem* syst, const PARALLACTIONGameDescription *gameDesc);
-@@ -598,13 +723,35 @@ public:
+@@ -598,13 +733,84 @@ public:
  	void parseLocation(const char* name) override;
  	void changeLocation() override;
  	void changeCharacter(const char *name) override;
@@ -10530,6 +12195,55 @@ index abfeacc9..78fd23f5 100644
 +	bool _detoursLoaded = false;
 +	void loadLocationDetours();
 +	bool applyLocationDetour();
++
++	// Flags passed between parts (loc/flag-parti.txt, from the patch): at the end of part <from>, if the
++	// condition (the syntax of the hints) holds, the global flag <flag> of part <to> is remembered, and set
++	// when part <to> starts. The engine holds no flag of its own. _partFlags ("<to>:<flag>") is saved.
++	struct PartFlagRule {
++		int from, to;
++		Common::String flag, condition, setting;
++	};
++	Common::Array<PartFlagRule> _partFlagRules;
++	bool _partFlagRulesLoaded = false;
++	Common::StringArray _partFlags;
++	void loadPartFlagRules();
++	void rememberPartFlags();	// end of a part, before its tables are freed
++	void applyPartFlags();		// start of a part, after GLOBAL.TAB is loaded
++public:
++	void addPartFlag(const Common::String &entry);
++	const Common::StringArray &partFlags() const { return _partFlags; }
++
++	// items that have been in an inventory at least once in this part (term PRESO: of the hints)
++	void markTaken(int item);
++	bool wasTaken(int item) const;
++	Common::Array<uint16> takenItems() const;
++private:
++	uint32 _takenItems[16];		// bit per item id (4 + index in OBJECTS.TAB)
++
++	// the end comment of a location (ENDCOMMENT), shown when leaving it, as the DOS version did
++	void showLocationEndComment();
++public:
++
++	// End titles and credits (credits.cpp): loc/titoli.txt names, per part and location, the text
++	// (<name>/<language>.txt) that rolls some seconds after entering, its background and box. The
++	// game menu shows crediti/<language>.txt (Info). The engine holds no text or location of its own.
++	struct CreditsRoll {
++		int part = -1;
++		Common::String location, text, bgPart, bg;
++		uint32 delayMs = 0;
++		Common::Rect box;		// game pixels, empty = default
++		int speed = 20;			// game pixels per second
++	};
++	Common::Array<CreditsRoll> _creditsRolls;
++	bool _creditsRollsLoaded = false;
++	int _creditsRollDue = -1;	// roll waiting in this location, -1 none
++	uint32 _creditsRollAt = 0;
++	void loadCreditsRolls();
++	const CreditsRoll *creditsRollFor(const Common::String &text);
++	void armCreditsRoll();			// entering a location (changeLocation)
++	void updateCreditsRoll();		// every game frame (runGame)
++	bool hasCredits(const Common::String &text);
++	void showCredits(const Common::String &text, const CreditsRoll *roll = nullptr);
  		void callFunction(uint index, void* parm) override;
  	void runPendingZones() override;
  	void cleanupGame() override;
@@ -10551,7 +12265,7 @@ index abfeacc9..78fd23f5 100644
  
  	void setupSubtitles(const char *s, const char *s2, int y);
  	void clearSubtitles();
-@@ -617,13 +764,26 @@ public:
+@@ -617,13 +823,27 @@ public:
  
  public:
  	bool	counterExists(const Common::String &name);
@@ -10562,6 +12276,7 @@ index abfeacc9..78fd23f5 100644
 +	bool	hintCondition(const Common::String &cond);
 +	bool	hintTerm(const Common::String &t);
 +	uint32	hintLocalFlag(const Common::String &loc, const Common::String &flag);
++	bool	hintZoneOn(const Common::String &loc, const Common::String &zone);
  	int		getCounterValue(const Common::String &name);
  	void	setCounterValue(const Common::String &name, int value);
  
@@ -10578,7 +12293,7 @@ index abfeacc9..78fd23f5 100644
  	void	enableSfx(bool enable);
  	void	enableMusic(bool enable);
  
-@@ -640,6 +800,17 @@ public:
+@@ -640,6 +860,17 @@ public:
  	int			_subtitleY;
  	GfxObj		*_subtitle[2];
  	ZonePtr		_activeZone2;
@@ -10596,7 +12311,7 @@ index abfeacc9..78fd23f5 100644
  	uint32		_zoneFlags[NUM_LOCATIONS][NUM_ZONES];
  
  private:
-@@ -674,9 +845,17 @@ private:
+@@ -674,9 +905,17 @@ private:
  	static const Callable _amigaCallables[6];
  
  	Common::String		_followerName;
@@ -10616,7 +12331,7 @@ index abfeacc9..78fd23f5 100644
  	// dos callables
  	void _c_null(void *);
 diff --git a/engines/parallaction/parallaction_br.cpp b/engines/parallaction/parallaction_br.cpp
-index e27c9f2d..53821bbd 100644
+index e27c9f2d..0ceb4c40 100644
 --- a/engines/parallaction/parallaction_br.cpp
 +++ b/engines/parallaction/parallaction_br.cpp
 @@ -20,16 +20,25 @@
@@ -10645,7 +12360,7 @@ index e27c9f2d..53821bbd 100644
  
  namespace Parallaction {
  
-@@ -53,6 +62,13 @@ Parallaction_br::Parallaction_br(OSystem* syst, const PARALLACTIONGameDescriptio
+@@ -53,6 +62,14 @@ Parallaction_br::Parallaction_br(OSystem* syst, const PARALLACTIONGameDescriptio
  	_countersNames = nullptr;
  	_callables = nullptr;
  	_walker = nullptr;
@@ -10656,10 +12371,11 @@ index e27c9f2d..53821bbd 100644
 +	_albcycleMode = 0;
 +	_blufadeLevel = 0;
 +	_blufadeStep = 4;
++	memset(_takenItems, 0, sizeof(_takenItems));
  }
  
  Common::Error Parallaction_br::init() {
-@@ -60,17 +76,53 @@ Common::Error Parallaction_br::init() {
+@@ -60,17 +77,56 @@ Common::Error Parallaction_br::init() {
  	_screenWidth = 640;
  	_screenHeight = 400;
  
@@ -10707,15 +12423,18 @@ index e27c9f2d..53821bbd 100644
  		}
 -		_disk->setLanguage(2);					// NOTE: language is now hardcoded to English. Original used command-line parameters.
 +		_disk->setLanguage(language);
++		// the language of the patch's files (text/, hint/, manual/...), see braLanguageCodes()
++		setInternLanguage(language);
  		_soundManI = new DosSoundMan_br(this);
  	} else {
  		_disk = new AmigaDisk_br(this);
 -		_disk->setLanguage(2);					// NOTE: language is now hardcoded to English. Original used command-line parameters.
 +		_disk->setLanguage(2);					// NOTE: the Amiga version is handled as English only
++		setInternLanguage(2);
  		_soundManI = new AmigaSoundMan_br(this);
  	}
  
-@@ -123,6 +175,7 @@ Parallaction_br::~Parallaction_br() {
+@@ -123,6 +179,7 @@ Parallaction_br::~Parallaction_br() {
  	_location._animations.remove(_char._ani);
  
  	delete _walker;
@@ -10723,7 +12442,7 @@ index e27c9f2d..53821bbd 100644
  }
  
  void Parallaction_br::callFunction(uint index, void* parm) {
-@@ -144,6 +197,9 @@ bool Parallaction_br::processGameEvent(int event) {
+@@ -144,6 +201,9 @@ bool Parallaction_br::processGameEvent(int event) {
  		startIngameMenu();
  		c = false;
  		break;
@@ -10733,7 +12452,7 @@ index e27c9f2d..53821bbd 100644
  	default:
  		break;
  	}
-@@ -153,9 +209,17 @@ bool Parallaction_br::processGameEvent(int event) {
+@@ -153,9 +213,17 @@ bool Parallaction_br::processGameEvent(int event) {
  	return c;
  }
  
@@ -10751,7 +12470,16 @@ index e27c9f2d..53821bbd 100644
  
  	while (!shouldQuit()) {
  
-@@ -196,11 +260,31 @@ void Parallaction_br::freeFonts() {
+@@ -178,6 +246,8 @@ Common::Error Parallaction_br::go() {
+ 		g_engineFlags &= ~kEngineReturn;
+ 
+ 		cleanupGame();
++		// back to the main menu: a new game remembers nothing from this one
++		_partFlags.clear();
+ 	}
+ 
+ 	return Common::kNoError;
+@@ -196,11 +266,31 @@ void Parallaction_br::freeFonts() {
  }
  
  
@@ -10783,7 +12511,7 @@ index e27c9f2d..53821bbd 100644
  	if (_activeZone) {
  		z = _activeZone;	// speak Zone or sound
  		_activeZone.reset();
-@@ -235,6 +319,10 @@ void Parallaction_br::freeCharacter() {
+@@ -235,6 +325,10 @@ void Parallaction_br::freeCharacter() {
  void Parallaction_br::freeLocation(bool removeAll) {
  	// free open location stuff
  	clearSubtitles();
@@ -10794,7 +12522,15 @@ index e27c9f2d..53821bbd 100644
  
  	_localFlagNames->clear();
  
-@@ -281,9 +369,14 @@ void Parallaction_br::changeLocation() {
+@@ -274,6 +368,7 @@ void Parallaction_br::cleanupGame() {
+ 	memset(_localFlags, 0, sizeof(_localFlags));
+ 	memset(_locationNames, 0, sizeof(_locationNames));
+ 	memset(_zoneFlags, 0, sizeof(_zoneFlags));
++	memset(_takenItems, 0, sizeof(_takenItems));
+ }
+ 
+ 
+@@ -281,9 +376,20 @@ void Parallaction_br::changeLocation() {
  	if (_newLocationName.empty()) {
  		return;
  	}
@@ -10802,6 +12538,12 @@ index e27c9f2d..53821bbd 100644
 +	if (_nextPart == -1 && !_pendingLoad)
 +		applyLocationDetour();
 +	debugC(1, kDebugExec, "changeLocation(%s, part %d)%s", _newLocationName.c_str(), _nextPart, _pendingLoad ? " [loading game]" : "");
++
++	// leaving the location: its end comment, then (end of a part) the flags passed to the next parts,
++	// while the tables of the part being left are still there
++	showLocationEndComment();
++	if (_nextPart != -1 && !_pendingLoad)
++		rememberPartFlags();
  
  	if (_nextPart != -1) {
  		cleanupGame();
@@ -10809,7 +12551,16 @@ index e27c9f2d..53821bbd 100644
  
  		// more cleanup needed for part changes (see also saveload)
  		g_globalFlags = 0;
-@@ -318,10 +411,37 @@ void Parallaction_br::changeLocation() {
+@@ -305,6 +411,8 @@ void Parallaction_br::changeLocation() {
+ 		_globalFlagsNames = _disk->loadTable("global");
+ 		_objectsNames = _disk->loadTable("objects");
+ 		_countersNames = _disk->loadTable("counters");
++		if (!_pendingLoad)
++			applyPartFlags();
+ 
+ 		// TODO: maybe handle this into Disk
+ 		delete _objects;
+@@ -318,10 +426,37 @@ void Parallaction_br::changeLocation() {
  	}
  
  	freeLocation(false);
@@ -10847,7 +12598,7 @@ index e27c9f2d..53821bbd 100644
  	if (_location._startPosition.x != -1000) {
  		_char._ani->setFoot(_location._startPosition);
  		_char._ani->setF(_location._startFrame);
-@@ -359,15 +479,30 @@ void Parallaction_br::changeLocation() {
+@@ -359,15 +494,31 @@ void Parallaction_br::changeLocation() {
  	// kFlagsRemove is cleared because the character is visible by default.
  	// Commands can hide the character, anyway.
  	_char._ani->_flags &= ~kFlagsRemove;
@@ -10864,14 +12615,15 @@ index e27c9f2d..53821bbd 100644
 +	}
  
  	_cmdExec->run(_location._aCommands);
++	armCreditsRoll();	// end titles of this location (loc/titoli.txt)
++
++	// The CD version (re)starts the location CD track here; MIDI music is
++	// controlled by the MUSIC commands of the scripts.
++	_soundManI->locationMusic();
  
 -	// NOTE: music should not started here!
 -	// TODO: implement the music commands which control music execution
 -	_soundMan->execute(SC_PLAYMUSIC);
-+	// The CD version (re)starts the location CD track here; MIDI music is
-+	// controlled by the MUSIC commands of the scripts.
-+	_soundManI->locationMusic();
-+
 +	if (_pendingLoad) {
 +		// a saved game was loaded while this location was being set up
 +		// (e.g. from the ScummVM menu during the location comment): keep
@@ -10881,7 +12633,7 @@ index e27c9f2d..53821bbd 100644
  
  	g_engineFlags &= ~kEngineChangeLocation;
  	_newLocationName.clear();
-@@ -382,6 +517,14 @@ void Parallaction_br::parseLocation(const char *filename) {
+@@ -382,6 +533,14 @@ void Parallaction_br::parseLocation(const char *filename) {
  	allocateLocationSlot(filename);
  	Script *script = _disk->loadLocation(filename);
  
@@ -10896,7 +12648,7 @@ index e27c9f2d..53821bbd 100644
  	// parse the text file
  	LocationParserOutput_br out;
  	_locationParser->parse(script, &out);
-@@ -395,6 +538,18 @@ void Parallaction_br::parseLocation(const char *filename) {
+@@ -395,6 +554,18 @@ void Parallaction_br::parseLocation(const char *filename) {
  		out._backgroundName.empty() ? nullptr : out._backgroundName.c_str(),
  		out._maskName.empty()       ? nullptr : out._maskName.c_str(),
  		out._pathName.empty()       ? nullptr : out._pathName.c_str());
@@ -10915,7 +12667,7 @@ index e27c9f2d..53821bbd 100644
  	// assign background
  	_gfx->setBackground(kBackgroundLocation, out._info);
  
-@@ -456,6 +611,121 @@ void Parallaction_br::loadProgram(AnimationPtr a, const char *filename) {
+@@ -456,6 +627,282 @@ void Parallaction_br::loadProgram(AnimationPtr a, const char *filename) {
  	return;
  }
  
@@ -10971,6 +12723,158 @@ index e27c9f2d..53821bbd 100644
 +		return true;
 +	}
 +	return false;
++}
++
++void Parallaction_br::loadPartFlagRules() {
++	_partFlagRulesLoaded = true;
++	Common::File f;
++	if (!f.open(Common::Path("loc/flag-parti.txt", '/')))
++		return;
++	while (!f.eos() && !f.err()) {
++		Common::String line = f.readLine();
++		int hash = line.findFirstOf('#');
++		if (hash >= 0)
++			line = Common::String(line.c_str(), hash);
++		line.trim();
++		if (line.empty())
++			continue;
++		// <from> TAB <to> TAB <flag> TAB <condition> [TAB opzione=<setting>]
++		Common::StringTokenizer tok(line, "\t");
++		Common::StringArray w;
++		while (!tok.empty()) {
++			Common::String x = tok.nextToken();
++			x.trim();
++			if (!x.empty())
++				w.push_back(x);
++		}
++		if (w.size() < 4 || !Common::isDigit(w[0][0]) || !Common::isDigit(w[1][0])) {
++			warning("loc/flag-parti.txt: bad line '%s'", line.c_str());
++			continue;
++		}
++		PartFlagRule r;
++		r.from = atoi(w[0].c_str());
++		r.to = atoi(w[1].c_str());
++		r.flag = w[2];
++		r.condition = w[3];
++		for (uint i = 4; i < w.size(); i++) {
++			if (w[i].hasPrefixIgnoreCase("opzione=") || w[i].hasPrefixIgnoreCase("setting="))
++				r.setting = w[i].c_str() + w[i].findFirstOf('=') + 1;
++			else
++				warning("loc/flag-parti.txt: unknown field '%s'", w[i].c_str());
++		}
++		_partFlagRules.push_back(r);
++	}
++	debugC(1, kDebugParser, "%d part flag rules loaded", _partFlagRules.size());
++}
++
++void Parallaction_br::addPartFlag(const Common::String &entry) {
++	for (uint i = 0; i < _partFlags.size(); i++)
++		if (_partFlags[i].equalsIgnoreCase(entry))
++			return;
++	_partFlags.push_back(entry);
++}
++
++void Parallaction_br::rememberPartFlags() {
++	if (!_partFlagRulesLoaded)
++		loadPartFlagRules();
++	if (_part < 0 || !_globalFlagsNames)
++		return;
++	for (uint i = 0; i < _partFlagRules.size(); i++) {
++		const PartFlagRule &r = _partFlagRules[i];
++		if (r.from != _part || (!r.setting.empty() && !braSettingOn(r.setting.c_str())))
++			continue;
++		if (!hintCondition(r.condition)) {
++			debugC(1, kDebugExec, "flag-parti: %d:%s not remembered", r.to, r.flag.c_str());
++			continue;
++		}
++		addPartFlag(Common::String::format("%d:%s", r.to, r.flag.c_str()));
++		debugC(1, kDebugExec, "flag-parti: %d:%s remembered", r.to, r.flag.c_str());
++	}
++}
++
++void Parallaction_br::applyPartFlags() {
++	if (!_partFlagRulesLoaded)
++		loadPartFlagRules();
++	for (uint i = 0; i < _partFlags.size(); i++) {
++		const Common::String &e = _partFlags[i];
++		int colon = e.findFirstOf(':');
++		if (colon <= 0 || atoi(e.c_str()) != _part)
++			continue;
++		Common::String flag = e.substr(colon + 1);
++		// a rule turned off by its setting (the Director's Cut switched off since) sets nothing
++		bool off = false;
++		for (uint k = 0; k < _partFlagRules.size(); k++) {
++			const PartFlagRule &r = _partFlagRules[k];
++			if (r.to == _part && r.flag.equalsIgnoreCase(flag) && !r.setting.empty() && !braSettingOn(r.setting.c_str()))
++				off = true;
++		}
++		if (off) {
++			debugC(1, kDebugExec, "flag-parti: %s off by its setting", e.c_str());
++			continue;
++		}
++		uint16 n = _globalFlagsNames ? _globalFlagsNames->lookup(flag.c_str()) : Table::notFound;
++		if (n == Table::notFound) {
++			warning("loc/flag-parti.txt: no global flag %s in part %d", flag.c_str(), _part);
++			continue;
++		}
++		g_globalFlags |= 1u << (n - 1);
++		debugC(1, kDebugExec, "flag-parti: %s set", e.c_str());
++	}
++}
++
++void Parallaction_br::markTaken(int item) {
++	if (item >= 4 && item < (int)(ARRAYSIZE(_takenItems) * 32))
++		_takenItems[item / 32] |= 1u << (item % 32);
++}
++
++bool Parallaction_br::wasTaken(int item) const {
++	return item >= 4 && item < (int)(ARRAYSIZE(_takenItems) * 32) && (_takenItems[item / 32] & (1u << (item % 32)));
++}
++
++Common::Array<uint16> Parallaction_br::takenItems() const {
++	Common::Array<uint16> out;
++	for (int i = 4; i < (int)(ARRAYSIZE(_takenItems) * 32); i++)
++		if (wasTaken(i))
++			out.push_back(i);
++	return out;
++}
++
++// The original (ChangeLocation_ in ADV.EXE) showed the ENDCOMMENT of a location before loading the next
++// one: the palette fades to grey, the comment box, a click. Not when a saved game is loaded or the location
++// is entered again; only with the Director's Cut (bra_directors_cut, on when absent).
++void Parallaction_br::showLocationEndComment() {
++	if (_location._endComment.empty() || _pendingLoad || _locationFile.empty())
++		return;
++	// the file left, not _location._name (its LOCATION line names the background: LENTV.LOC says TV)
++	if (_nextPart == -1 && _newLocationName.equalsIgnoreCase(_locationFile))
++		return;
++	if (!braSettingOn("bra_directors_cut")) {
++		debugC(1, kDebugExec, "end comment of %s: off (bra_directors_cut)", _locationFile.c_str());
++		return;
++	}
++	debugC(1, kDebugExec, "end comment of %s", _locationFile.c_str());
++
++	Palette grey(_gfx->_palette);
++	grey.makeGrayscale();
++	Palette pal(_gfx->_palette);
++	for (uint i = 0; i < 64; i++) {
++		pal.fadeTo(grey, 1);
++		_gfx->setPalette(pal);
++		_gfx->updateScreen();
++		_system->delayMillis(20);
++		if (shouldQuit())
++			return;
++	}
++	_gfx->setPalette(grey);
++
++	showLocationComment(_location._endComment, true);
++	_gfx->updateScreen();
++
++	_input->waitForButtonEvent(kMouseLeftUp);
++	_gfx->freeDialogueObjects();
++	setTTSVoice(_characterVoiceID);
++	_location._endComment.clear();
++	debugC(1, kDebugExec, "end comment of %s closed", _locationFile.c_str());
 +}
 +
 +void Parallaction_br::setPartReached(int part) {
@@ -11032,12 +12936,21 @@ index e27c9f2d..53821bbd 100644
 +
 +	if (!st->musicFile.empty())
 +		_soundMan->execute(SC_SETMUSICFILE, st->musicFile.c_str());
++
++	// saved games without these lines (older ones) remember nothing
++	_partFlags = st->partFlags;
++	memset(_takenItems, 0, sizeof(_takenItems));
++	for (uint i = 0; i < st->takenItems.size(); i++)
++		markTaken(st->takenItems[i]);
++	for (int k = 0; k < 3; k++)
++		for (uint i = 0; i < st->inventories[k].size(); i++)
++			markTaken(st->inventories[k][i]._index);
 +}
 +
  void Parallaction_br::linkUnlinkedZoneAnimations() {
  	ZoneList::iterator zit = _location._zones.begin();
  	for ( ; zit != _location._zones.end(); ++zit) {
-@@ -469,7 +739,10 @@ void Parallaction_br::changeCharacter(const char *name) {
+@@ -469,7 +916,10 @@ void Parallaction_br::changeCharacter(const char *name) {
  
  	const char *charName = _char.getName();
  
@@ -11049,7 +12962,7 @@ index e27c9f2d..53821bbd 100644
  		freeCharacter();
  
  		debugC(1, kDebugExec, "changeCharacter(%s)", name);
-@@ -478,8 +751,13 @@ void Parallaction_br::changeCharacter(const char *name) {
+@@ -478,8 +928,13 @@ void Parallaction_br::changeCharacter(const char *name) {
  		_char._ani->gfxobj = _gfx->loadCharacterAnim(name);
  		_char._talk = _disk->loadTalk(name);
  
@@ -11065,7 +12978,7 @@ index e27c9f2d..53821bbd 100644
  
  		_input->setCharacterPointer(name);
  	}
-@@ -487,11 +765,20 @@ void Parallaction_br::changeCharacter(const char *name) {
+@@ -487,11 +942,20 @@ void Parallaction_br::changeCharacter(const char *name) {
  	_char._ani->_flags |= kFlagsActive;
  }
  
@@ -11086,7 +12999,7 @@ index e27c9f2d..53821bbd 100644
  	int index = _countersNames->lookup(name.c_str());
  	if (index != Table::notFound) {
  		return _counters[index - 1];
-@@ -500,6 +787,8 @@ int	Parallaction_br::getCounterValue(const Common::String &name) {
+@@ -500,6 +964,8 @@ int	Parallaction_br::getCounterValue(const Common::String &name) {
  }
  
  void Parallaction_br::setCounterValue(const Common::String &name, int value) {
@@ -11095,7 +13008,7 @@ index e27c9f2d..53821bbd 100644
  	int index = _countersNames->lookup(name.c_str());
  	if (index != Table::notFound) {
  		_counters[index - 1] = value;
-@@ -507,7 +796,7 @@ void Parallaction_br::setCounterValue(const Common::String &name, int value) {
+@@ -507,7 +973,7 @@ void Parallaction_br::setCounterValue(const Common::String &name, int value) {
  }
  
  void Parallaction_br::testCounterCondition(const Common::String &name, int op, int value) {
@@ -11104,7 +13017,7 @@ index e27c9f2d..53821bbd 100644
  	if (index == Table::notFound) {
  		clearLocationFlags(kFlagsTestTrue);
  		return;
-@@ -556,6 +845,11 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
+@@ -556,6 +1022,11 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
  		return;
  	}
  
@@ -11116,7 +13029,7 @@ index e27c9f2d..53821bbd 100644
  	_walker->setCharacterPath(a, x, y);
  
  	if (!fromUser) {
-@@ -569,6 +863,10 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
+@@ -569,6 +1040,10 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
  	g_engineFlags |= kEngineWalking;
  }
  
@@ -11127,7 +13040,7 @@ index e27c9f2d..53821bbd 100644
  void Parallaction_br::setFollower(const Common::String &name) {
  	if (name.empty()) {
  		_followerName.clear();
-@@ -591,6 +889,18 @@ void Parallaction_br::restoreOrSaveZoneFlags(ZonePtr z, bool restore) {
+@@ -591,6 +1066,18 @@ void Parallaction_br::restoreOrSaveZoneFlags(ZonePtr z, bool restore) {
  	}
  }
  
@@ -11256,16 +13169,17 @@ index 5c7c8309..ea58d349 100644
  		byte _al = table->lookup(flag+2);
  		if (_al != Table::notFound) {
 diff --git a/engines/parallaction/saveload.cpp b/engines/parallaction/saveload.cpp
-index 3168d387..1baccadb 100644
+index 3168d387..7182fcb5 100644
 --- a/engines/parallaction/saveload.cpp
 +++ b/engines/parallaction/saveload.cpp
-@@ -21,12 +21,18 @@
+@@ -21,12 +21,19 @@
  
  #include "common/savefile.h"
  #include "common/config-manager.h"
 +#include "common/system.h"
  #include "common/textconsole.h"
  #include "common/translation.h"
++#include "common/tokenizer.h"
  
  #include "gui/saveload.h"
  #include "gui/message.h"
@@ -11278,7 +13192,7 @@ index 3168d387..1baccadb 100644
  #include "parallaction/parallaction.h"
  #include "parallaction/saveload.h"
  #include "parallaction/sound.h"
-@@ -322,26 +328,284 @@ void SaveLoad_ns::renameOldSavefiles() {
+@@ -322,26 +329,336 @@ void SaveLoad_ns::renameOldSavefiles() {
  	dialog1.runModal();
  }
  
@@ -11311,8 +13225,8 @@ index 3168d387..1baccadb 100644
 -	// TODO: implement savegame
 +static int readInt(Common::SeekableReadStream *f) {
 +	return atoi(f->readLine().c_str());
- }
- 
++}
++
 +void SaveLoad_br::doSaveGame(uint16 slot, const char *name) {
 +	Common::OutSaveFile *f = getOutSaveFile(slot);
 +	if (f == nullptr) {
@@ -11376,6 +13290,22 @@ index 3168d387..1baccadb 100644
 +
 +	writeLine(f, _vm->_soundManI ? _vm->_soundManI->getMusicFile() : Common::String());
 +
++	// optional lines, only when not empty: older engines stop reading before them
++	const Common::StringArray &pf = _vm->partFlags();
++	if (!pf.empty()) {
++		Common::String l("flag-parti:");
++		for (uint i = 0; i < pf.size(); i++)
++			l += " " + pf[i];
++		writeLine(f, l);
++	}
++	Common::Array<uint16> taken = _vm->takenItems();
++	if (!taken.empty()) {
++		Common::String l("preso:");
++		for (uint i = 0; i < taken.size(); i++)
++			l += Common::String::format(" %u", taken[i]);
++		writeLine(f, l);
++	}
++
 +	// date, play time and thumbnail for the ScummVM save/load dialogs; the
 +	// thumbnail comes from the game screen (HD and 16:9 included), the ScummVM
 +	// menu is drawn on the overlay and does not appear in it
@@ -11383,8 +13313,8 @@ index 3168d387..1baccadb 100644
 +
 +	f->finalize();
 +	delete f;
-+}
-+
+ }
+ 
 +void SaveLoad_br::doLoadGame(uint16 slot) {
 +	Common::InSaveFile *f = getInSaveFile(slot);
 +	if (!f)
@@ -11447,6 +13377,42 @@ index 3168d387..1baccadb 100644
 +		}
 +	}
 +	st->musicFile = f->readLine();
++
++	// optional lines (flag-parti:, preso:), before the extended header (its offset is in the last 4 bytes)
++	{
++		int64 start = f->pos();
++		int64 limit = f->size();
++		if (f->size() >= 8) {
++			f->seek(-4, SEEK_END);
++			uint32 off = f->readUint32LE();
++			if (off > (uint32)start && off < (uint32)f->size())
++				limit = off;
++		}
++		f->seek(start, SEEK_SET);
++		while (!f->eos() && !f->err() && f->pos() < limit) {
++			int64 at = f->pos();
++			Common::String l = f->readLine();
++			if (l.hasPrefix("flag-parti:")) {
++				Common::StringTokenizer tok(l.c_str() + 11, " ");
++				while (!tok.empty()) {
++					Common::String w = tok.nextToken();
++					if (!w.empty())
++						st->partFlags.push_back(w);
++				}
++			} else if (l.hasPrefix("preso:")) {
++				Common::StringTokenizer tok(l.c_str() + 6, " ");
++				while (!tok.empty()) {
++					Common::String w = tok.nextToken();
++					if (!w.empty())
++						st->takenItems.push_back(atoi(w.c_str()));
++				}
++			} else {
++				f->seek(at, SEEK_SET);
++				break;
++			}
++		}
++		f->clearErr();
++	}
 +
 +	// play time from the extended header, when the file has one
 +	ExtendedSavegameHeader header;
