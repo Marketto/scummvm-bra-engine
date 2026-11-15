@@ -10356,10 +10356,10 @@ index 00000000..7127579c
 +} // End of namespace Parallaction
 diff --git a/engines/parallaction/menu_br.cpp b/engines/parallaction/menu_br.cpp
 new file mode 100644
-index 00000000..622b0130
+index 00000000..2e50d819
 --- /dev/null
 +++ b/engines/parallaction/menu_br.cpp
-@@ -0,0 +1,563 @@
+@@ -0,0 +1,579 @@
 +/* ScummVM - Graphic Adventure Engine
 + *
 + * ScummVM is the legal property of its developers, whose names
@@ -10605,7 +10605,7 @@ index 00000000..622b0130
 +	enum { kFit = 0, kFill = 1, kStretch = 2 };
 +
 +	Engine *_engine;
-+	GUI::StaticTextWidget *_dropboxText;
++	GUI::StaticTextWidget *_dropboxText, *_dropboxText2;
 +	GUI::CheckboxWidget *_dropboxAuto;
 +	GUI::ButtonWidget *_dropboxSync;
 +	GUI::RadiobuttonGroup *_screen;
@@ -10616,12 +10616,18 @@ index 00000000..622b0130
 +	bool _quiet = true;
 +
 +	GUI::SliderWidget *slider(const char *name, const char *it, const char *en, const char *fr, const char *de, const char *key, uint32 cmd) {
-+		new GUI::StaticTextWidget(this, Common::String::format("BraSettings.%sText", name), T(it, en, fr, de));
++		new GUI::StaticTextWidget(this, Common::String::format("BraSettings.%sText", name), T(it, en, fr, de), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
 +		GUI::SliderWidget *s = new GUI::SliderWidget(this, Common::String::format("BraSettings.%sSlider", name), Common::U32String(), cmd);
 +		s->setMinValue(0);
 +		s->setMaxValue(Audio::Mixer::kMaxMixerVolume);
 +		s->setValue(ConfMan.hasKey(key) ? ConfMan.getInt(key) : Audio::Mixer::kMaxMixerVolume);
 +		return s;
++	}
++
++	// the title of a group of settings (Audio, Screen, Game, Dropbox): bold, in the theme's alternative colour (gold)
++	void header(const char *name, const Common::U32String &text) {
++		GUI::StaticTextWidget *t = new GUI::StaticTextWidget(this, Common::String::format("BraSettings.%s", name), text);
++		t->setFontColor(GUI::ThemeEngine::kFontColorAlternate);
 +	}
 +
 +	static const char *modeName(int v) {
@@ -10668,7 +10674,14 @@ index 00000000..622b0130
 +		bool linked = ok && p[0] == "1", automatic = ok && p[1] == "1", busy = ok && p[2] == "1";
 +		Common::U32String text = ok ? Common::U32String(rest, Common::kUtf8)
 +			: T("Non disponibile qui.", "Not available here.", "Non disponible ici.", "Hier nicht verfügbar.");
-+		_dropboxText->setLabel(text);
++		// two lines, wrapped on the width of the widget (the status texts of the page are long for a phone)
++		Common::Array<Common::U32String> lines;
++		g_gui.getFont(GUI::ThemeEngine::kFontStyleNormal).wordWrapText(text, MAX<int>(_dropboxText->getWidth(), 40), lines);
++		_dropboxText->setLabel(lines.size() > 0 ? lines[0] : Common::U32String());
++		Common::U32String second;
++		for (uint i = 1; i < lines.size(); i++)
++			second += (i > 1 ? Common::U32String(" ") : Common::U32String()) + lines[i];
++		_dropboxText2->setLabel(second);
 +		bool q = _quiet;
 +		_quiet = true;
 +		_dropboxAuto->setState(linked && automatic);
@@ -10682,20 +10695,22 @@ index 00000000..622b0130
 +	BraSettingsDialog(Engine *engine) : RaysDialog("BraSettings"), _engine(engine) {
 +		new GUI::StaticTextWidget(this, "BraSettings.Title", T("Impostazioni", "Settings", "Paramètres", "Einstellungen"));
 +
++		header("AudioTitle", T("Audio", "Audio", "Audio", "Audio"));
 +		slider("Music", "Musica", "Music", "Musique", "Musik", "music_volume", kMusicCmd);
 +		slider("Sfx", "Effetti", "Effects", "Effets", "Effekte", "sfx_volume", kSfxCmd);
 +		slider("Speech", "Voci", "Voices", "Voix", "Stimmen", "speech_volume", kSpeechCmd);
 +
-+		new GUI::StaticTextWidget(this, "BraSettings.ScreenText", T("Schermo", "Screen", "Écran", "Bildschirm"));
++		header("ScreenText", T("Schermo", "Screen", "Écran", "Bildschirm"));
 +		_screen = new GUI::RadiobuttonGroup(this, kScreenCmd);
-+		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFit", _screen, kFit, T("Proporzioni originali (bande nere)", "Original proportions (black bands)", "Proportions d'origine (bandes noires)", "Originalformat (schwarze Balken)"));
-+		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFill", _screen, kFill, T("Riempi lo schermo (taglia i bordi)", "Fill the screen (crops the edges)", "Remplir l'écran (rogne les bords)", "Bildschirm füllen (Ränder abgeschnitten)"));
++		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFit", _screen, kFit, T("Originale (bande nere)", "Original (black bands)", "Original (bandes noires)", "Original (schwarze Balken)"));
++		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenFill", _screen, kFill, T("Riempi (taglia i bordi)", "Fill (crops the edges)", "Remplir (rogne les bords)", "Füllen (Ränder weg)"));
 +		new GUI::RadiobuttonWidget(this, "BraSettings.ScreenStretch", _screen, kStretch, T("Allarga", "Stretch", "Étirer", "Strecken"));
 +		Common::String mode = ConfMan.hasKey("stretch_mode") ? ConfMan.get("stretch_mode") : "fit";
 +		_screen->setValue(mode == "fill" ? kFill : mode == "stretch" ? kStretch : kFit);
 +
++		header("GameTitle", T("Gioco", "Game", "Jeu", "Spiel"));
 +		GUI::CheckboxWidget *sc = new GUI::CheckboxWidget(this, "BraSettings.Shortcuts",
-+			T("Pulsanti rapidi sullo schermo", "Quick buttons on screen", "Boutons rapides à l'écran", "Schnelltasten auf dem Bildschirm"), Common::U32String(), kShortcutsCmd);
++			T("Pulsanti rapidi a schermo", "Quick buttons on screen", "Boutons rapides à l'écran", "Schnelltasten am Bildschirm"), Common::U32String(), kShortcutsCmd);
 +		sc->setState(!ConfMan.hasKey("bra_scorciatoie") || ConfMan.getBool("bra_scorciatoie"));
 +
 +		// the launcher's game option (game domain); a change counts from the next location
@@ -10706,8 +10721,9 @@ index 00000000..622b0130
 +			"Aus dem Original geschnittene Szenen und Sätze (ab dem nächsten Ort)"), kDirectorsCutCmd);
 +		dc->setState(braSettingOn("bra_directors_cut"));
 +
-+		new GUI::StaticTextWidget(this, "BraSettings.DropboxTitle", T("Salvataggi su Dropbox", "Saves on Dropbox", "Sauvegardes sur Dropbox", "Spielstände auf Dropbox"));
++		header("DropboxTitle", T("Salvataggi su Dropbox", "Saves on Dropbox", "Sauvegardes sur Dropbox", "Spielstände auf Dropbox"));
 +		_dropboxText = new GUI::StaticTextWidget(this, "BraSettings.DropboxText", Common::U32String(), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
++		_dropboxText2 = new GUI::StaticTextWidget(this, "BraSettings.DropboxText2", Common::U32String(), Common::U32String(), GUI::ThemeEngine::kFontStyleNormal);
 +		_dropboxAuto = new GUI::CheckboxWidget(this, "BraSettings.DropboxAuto", T("Sincronizza da solo", "Sync automatically", "Synchroniser automatiquement", "Automatisch synchronisieren"), Common::U32String(), kDropboxAutoCmd);
 +		_dropboxSync = new GUI::ButtonWidget(this, "BraSettings.DropboxSync", T("Sincronizza ora", "Sync now", "Synchroniser maintenant", "Jetzt synchronisieren"), Common::U32String(), kDropboxSyncCmd);
 +
@@ -12331,7 +12347,7 @@ index abfeacc9..63182efd 100644
  	// dos callables
  	void _c_null(void *);
 diff --git a/engines/parallaction/parallaction_br.cpp b/engines/parallaction/parallaction_br.cpp
-index e27c9f2d..0ceb4c40 100644
+index e27c9f2d..3dc06116 100644
 --- a/engines/parallaction/parallaction_br.cpp
 +++ b/engines/parallaction/parallaction_br.cpp
 @@ -20,16 +20,25 @@
@@ -12560,10 +12576,14 @@ index e27c9f2d..0ceb4c40 100644
  
  		// TODO: maybe handle this into Disk
  		delete _objects;
-@@ -318,10 +426,37 @@ void Parallaction_br::changeLocation() {
+@@ -318,10 +426,41 @@ void Parallaction_br::changeLocation() {
  	}
  
  	freeLocation(false);
++
++	// the trap the character stood in belongs to the location being left: walking in the next one
++	// would run its exit commands there (as Nippon Safes does, forget it)
++	_zoneTrap.reset();
 +
 +	// restore a saved game (after freeLocation, which stores the zone flags
 +	// of the location being left)
@@ -12598,7 +12618,7 @@ index e27c9f2d..0ceb4c40 100644
  	if (_location._startPosition.x != -1000) {
  		_char._ani->setFoot(_location._startPosition);
  		_char._ani->setF(_location._startFrame);
-@@ -359,15 +494,31 @@ void Parallaction_br::changeLocation() {
+@@ -359,15 +498,31 @@ void Parallaction_br::changeLocation() {
  	// kFlagsRemove is cleared because the character is visible by default.
  	// Commands can hide the character, anyway.
  	_char._ani->_flags &= ~kFlagsRemove;
@@ -12616,14 +12636,14 @@ index e27c9f2d..0ceb4c40 100644
  
  	_cmdExec->run(_location._aCommands);
 +	armCreditsRoll();	// end titles of this location (loc/titoli.txt)
-+
-+	// The CD version (re)starts the location CD track here; MIDI music is
-+	// controlled by the MUSIC commands of the scripts.
-+	_soundManI->locationMusic();
  
 -	// NOTE: music should not started here!
 -	// TODO: implement the music commands which control music execution
 -	_soundMan->execute(SC_PLAYMUSIC);
++	// The CD version (re)starts the location CD track here; MIDI music is
++	// controlled by the MUSIC commands of the scripts.
++	_soundManI->locationMusic();
++
 +	if (_pendingLoad) {
 +		// a saved game was loaded while this location was being set up
 +		// (e.g. from the ScummVM menu during the location comment): keep
@@ -12633,7 +12653,7 @@ index e27c9f2d..0ceb4c40 100644
  
  	g_engineFlags &= ~kEngineChangeLocation;
  	_newLocationName.clear();
-@@ -382,6 +533,14 @@ void Parallaction_br::parseLocation(const char *filename) {
+@@ -382,6 +537,14 @@ void Parallaction_br::parseLocation(const char *filename) {
  	allocateLocationSlot(filename);
  	Script *script = _disk->loadLocation(filename);
  
@@ -12648,7 +12668,7 @@ index e27c9f2d..0ceb4c40 100644
  	// parse the text file
  	LocationParserOutput_br out;
  	_locationParser->parse(script, &out);
-@@ -395,6 +554,18 @@ void Parallaction_br::parseLocation(const char *filename) {
+@@ -395,6 +558,18 @@ void Parallaction_br::parseLocation(const char *filename) {
  		out._backgroundName.empty() ? nullptr : out._backgroundName.c_str(),
  		out._maskName.empty()       ? nullptr : out._maskName.c_str(),
  		out._pathName.empty()       ? nullptr : out._pathName.c_str());
@@ -12667,7 +12687,7 @@ index e27c9f2d..0ceb4c40 100644
  	// assign background
  	_gfx->setBackground(kBackgroundLocation, out._info);
  
-@@ -456,6 +627,282 @@ void Parallaction_br::loadProgram(AnimationPtr a, const char *filename) {
+@@ -456,6 +631,282 @@ void Parallaction_br::loadProgram(AnimationPtr a, const char *filename) {
  	return;
  }
  
@@ -12950,7 +12970,7 @@ index e27c9f2d..0ceb4c40 100644
  void Parallaction_br::linkUnlinkedZoneAnimations() {
  	ZoneList::iterator zit = _location._zones.begin();
  	for ( ; zit != _location._zones.end(); ++zit) {
-@@ -469,7 +916,10 @@ void Parallaction_br::changeCharacter(const char *name) {
+@@ -469,7 +920,10 @@ void Parallaction_br::changeCharacter(const char *name) {
  
  	const char *charName = _char.getName();
  
@@ -12962,7 +12982,7 @@ index e27c9f2d..0ceb4c40 100644
  		freeCharacter();
  
  		debugC(1, kDebugExec, "changeCharacter(%s)", name);
-@@ -478,8 +928,13 @@ void Parallaction_br::changeCharacter(const char *name) {
+@@ -478,8 +932,13 @@ void Parallaction_br::changeCharacter(const char *name) {
  		_char._ani->gfxobj = _gfx->loadCharacterAnim(name);
  		_char._talk = _disk->loadTalk(name);
  
@@ -12978,7 +12998,7 @@ index e27c9f2d..0ceb4c40 100644
  
  		_input->setCharacterPointer(name);
  	}
-@@ -487,11 +942,20 @@ void Parallaction_br::changeCharacter(const char *name) {
+@@ -487,11 +946,20 @@ void Parallaction_br::changeCharacter(const char *name) {
  	_char._ani->_flags |= kFlagsActive;
  }
  
@@ -12999,7 +13019,7 @@ index e27c9f2d..0ceb4c40 100644
  	int index = _countersNames->lookup(name.c_str());
  	if (index != Table::notFound) {
  		return _counters[index - 1];
-@@ -500,6 +964,8 @@ int	Parallaction_br::getCounterValue(const Common::String &name) {
+@@ -500,6 +968,8 @@ int	Parallaction_br::getCounterValue(const Common::String &name) {
  }
  
  void Parallaction_br::setCounterValue(const Common::String &name, int value) {
@@ -13008,7 +13028,7 @@ index e27c9f2d..0ceb4c40 100644
  	int index = _countersNames->lookup(name.c_str());
  	if (index != Table::notFound) {
  		_counters[index - 1] = value;
-@@ -507,7 +973,7 @@ void Parallaction_br::setCounterValue(const Common::String &name, int value) {
+@@ -507,7 +977,7 @@ void Parallaction_br::setCounterValue(const Common::String &name, int value) {
  }
  
  void Parallaction_br::testCounterCondition(const Common::String &name, int op, int value) {
@@ -13017,7 +13037,7 @@ index e27c9f2d..0ceb4c40 100644
  	if (index == Table::notFound) {
  		clearLocationFlags(kFlagsTestTrue);
  		return;
-@@ -556,6 +1022,11 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
+@@ -556,6 +1026,11 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
  		return;
  	}
  
@@ -13029,7 +13049,7 @@ index e27c9f2d..0ceb4c40 100644
  	_walker->setCharacterPath(a, x, y);
  
  	if (!fromUser) {
-@@ -569,6 +1040,10 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
+@@ -569,6 +1044,10 @@ void Parallaction_br::scheduleWalk(int16 x, int16 y, bool fromUser) {
  	g_engineFlags |= kEngineWalking;
  }
  
@@ -13040,7 +13060,7 @@ index e27c9f2d..0ceb4c40 100644
  void Parallaction_br::setFollower(const Common::String &name) {
  	if (name.empty()) {
  		_followerName.clear();
-@@ -591,6 +1066,18 @@ void Parallaction_br::restoreOrSaveZoneFlags(ZonePtr z, bool restore) {
+@@ -591,6 +1070,18 @@ void Parallaction_br::restoreOrSaveZoneFlags(ZonePtr z, bool restore) {
  	}
  }
  
@@ -14314,7 +14334,7 @@ index 9280bf26..65195633 100644
  };
  
 diff --git a/engines/parallaction/walk.cpp b/engines/parallaction/walk.cpp
-index b603efb7..33677b66 100644
+index b603efb7..fc8cf746 100644
 --- a/engines/parallaction/walk.cpp
 +++ b/engines/parallaction/walk.cpp
 @@ -408,6 +408,9 @@ void PathWalker_BR::setCharacterPath(AnimationPtr a, uint16 x, uint16 y) {
@@ -14536,60 +14556,62 @@ index b603efb7..33677b66 100644
  	Common::Point pos, foot;
  	_vm->_gfx->getScrollPos(pos);
  	_character._a->getFoot(foot);
-@@ -577,39 +765,11 @@ void PathWalker_BR::checkTrap(const Common::Point &p) {
+@@ -554,13 +742,17 @@ void PathWalker_BR::walk() {
+ void PathWalker_BR::checkTrap(const Common::Point &p) {
+ 	ZonePtr z = _vm->hitZone(kZoneTrap, p.x, p.y);
+ 
++	// The scripts mean "FLAGS ENTER" for the step into a trap and "FLAGS EXIT" for the step out of it
++	// (KGB door, secretary, circus barker, as in Nippon Safes). The flags were swapped: on the train
++	// roof the jump started only when Doug walked out of the edge zone, so he stopped at the edge of
++	// the carriage going one way and jumped back going the other.
+ 	if (z && z != _vm->_zoneTrap) {
+ 		if (z->_flags & kFlagsIsAnimation) {
+ 			z->_flags |= kFlagsActing;
+ 		} else {
+-			_vm->setLocationFlags(kFlagsExit);
++			_vm->setLocationFlags(kFlagsEnter);
+ 			_vm->_cmdExec->run(z->_commands, z);
+-			_vm->clearLocationFlags(kFlagsExit);
++			_vm->clearLocationFlags(kFlagsEnter);
+ 		}
+ 	}
+ 
+@@ -568,15 +760,119 @@ void PathWalker_BR::checkTrap(const Common::Point &p) {
+ 		if (_vm->_zoneTrap->_flags & kFlagsIsAnimation) {
+ 			_vm->_zoneTrap->_flags &= ~kFlagsActing;
+ 		} else {
+-			_vm->setLocationFlags(kFlagsEnter);
++			_vm->setLocationFlags(kFlagsExit);
+ 			_vm->_cmdExec->run(_vm->_zoneTrap->_commands, _vm->_zoneTrap);
+-			_vm->clearLocationFlags(kFlagsEnter);
++			_vm->clearLocationFlags(kFlagsExit);
+ 		}
+ 	}
+ 
  	_vm->_zoneTrap = z;
  }
  
--void PathWalker_BR::doWalk(State &s) {
--	if (!s._active) {
--		return;
--	}
--
--	if (s._walkDelay > 0) {
--		s._walkDelay--;
--		if (s._walkDelay == 0 && !s._a->_scriptName.empty()) {
--			// stop script and reset
--			s._a->_flags &= ~kFlagsActing;
--//			_vm->_programExec->resetProgram(s._a->_scriptName);
--		}
--		return;
--	}
--
--	if (!s._stillWalkingTowardsNode) {
--		if (!s._walkPath.empty())
--			s._walkPath.erase(s._walkPath.begin());
--
--		if (s._walkPath.empty()) {
--			finalizeWalk(s);
--			debugC(3, kDebugWalk, "PathWalker_BR::doWalk, walk completed (no more nodes)");
--			return;
--		} else {
--			debugC(3, kDebugWalk, "PathWalker_BR::doWalk, reached a walkpath node, %i left", s._walkPath.size());
--		}
--	}
--
--	s._a->getFoot(s._startFoot);
--
--	uint scale = _vm->_location.getScale(s._startFoot.y);
--	int xStep = (scale * 16) / 100 + 1;
--	int yStep = (scale * 10) / 100 + 1;
 +// How far a step takes the feet at height "y", on each axis.
 +void PathWalker_BR::stepSize(int y, int &xStep, int &yStep) {
 +	uint scale = _vm->_location.getScale(y);
 +	xStep = (scale * 16) / 100 + 1;
 +	yStep = (scale * 10) / 100 + 1;
- 
- 	/* WORKAROUND: in the balloon scene, the position of the balloon (which is implemented as a
- 	Character) is controlled by the user (for movement, via this walking code) and by the scripts
-@@ -624,74 +784,141 @@ void PathWalker_BR::doWalk(State &s) {
- 	if (yStep == 3) yStep--;
- 
- 	debugC(9, kDebugWalk, "calculated step: (%i, %i)", xStep, yStep);
++
++	/* WORKAROUND: in the balloon scene, the position of the balloon (which is implemented as a
++	Character) is controlled by the user (for movement, via this walking code) and by the scripts
++	(to simulate the balloon floating in the air, in a neverending loop that alters the position
++	coordinates).
++	When the two step sizes are equal in magnitude and opposite in direction, then the walk code
++	enters an infinite loop without giving control back to the user (this happens quite frequently
++	when navigating the balloon near the borders of the screen, where the calculated step is
++	forcibly small because of clipping). Since the "floating" script (part1/scripts/mongolo.scr)
++	uses increments of 3 for both x and y, we tweak the calculated steps accordingly here. */
++	if (xStep == 3) xStep--;
++	if (yStep == 3) yStep--;
++
++	debugC(9, kDebugWalk, "calculated step: (%i, %i)", xStep, yStep);
 +}
- 
--	s._stillWalkingTowardsNode = false;
--	s._step++;
--	s._step %= 8;
++
 +// One walking step from the feet at "start" towards the node "p": where the feet go and the direction
 +// frame; false if they do not move (less than a step left on both axes, or the way is blocked).
 +// Shared by doWalk and nextFoot (the smooth motion draws the walk towards the next step).
@@ -14598,97 +14620,54 @@ index b603efb7..33677b66 100644
 +	stepSize(start.y, xStep, yStep);
 +
 +	bool moving = false;
- 
- 	int maxX = _vm->_gfx->_backgroundInfo->width;
- 	int minX = 0;
- 	int maxY = _vm->_gfx->_backgroundInfo->height;
- 	int minY = 0;
- 
--	int walkFrame = s._step;
--	s._dirFrame = 0;
--	Common::Point newpos(s._startFoot), delta;
--
--	assert (!s._walkPath.empty());
--	Common::Point p(*s._walkPath.begin());
++
++	int maxX = _vm->_gfx->_backgroundInfo->width;
++	int minX = 0;
++	int maxY = _vm->_gfx->_backgroundInfo->height;
++	int minY = 0;
++
 +	dirFrame = 0;
 +	newpos = start;
 +	Common::Point delta;
- 
--	if (s._startFoot.y < p.y && (s._startFoot.y + yStep) < maxY && isPathClear(s._startFoot.x, s._startFoot.y + yStep)) {
--		if (yStep + s._startFoot.y <= p.y) {
--			s._stillWalkingTowardsNode = true;
-+	if (start.y < p.y && (start.y + yStep) < maxY && isPathClear(start.x, start.y + yStep)) {
-+		if (yStep + start.y <= p.y) {
-+			moving = true;
- 			delta.y = yStep;
--			newpos.y = yStep + s._startFoot.y;
-+			newpos.y = yStep + start.y;
- 		} else {
--			delta.y = p.y - s._startFoot.y;
-+			delta.y = p.y - start.y;
- 			newpos.y = p.y;
- 		}
--		s._dirFrame = 9;
++
++	// The last step towards the destination is shorter than a whole step: check the point it lands on,
++	// not the one a whole step would reach. Checking the whole step (as the original ScummVM code did)
++	// stopped a character a step away from a narrow door at the edge of the background (train roof:
++	// the door to the next carriage is 10 px wide, Doug stopped at x 12 and never went through).
++	const int downY = MIN<int>(start.y + yStep, p.y), upY = MAX<int>(start.y - yStep, p.y);
++	if (start.y < p.y && downY < maxY && isPathClear(start.x, downY)) {
++		moving = downY - start.y == yStep;
++		delta.y = downY - start.y;
++		newpos.y = downY;
 +		dirFrame = 9;
- 	} else
--	if (s._startFoot.y > p.y && (s._startFoot.y - yStep) > minY && isPathClear(s._startFoot.x, s._startFoot.y - yStep)) {
--		if (s._startFoot.y - yStep >= p.y) {
--			s._stillWalkingTowardsNode = true;
-+	if (start.y > p.y && (start.y - yStep) > minY && isPathClear(start.x, start.y - yStep)) {
-+		if (start.y - yStep >= p.y) {
-+			moving = true;
- 			delta.y = yStep;
--			newpos.y = s._startFoot.y - yStep;
-+			newpos.y = start.y - yStep;
- 		} else {
--			delta.y = s._startFoot.y - p.y;
-+			delta.y = start.y - p.y;
- 			newpos.y = p.y;
- 		}
--		s._dirFrame = 0;
++	} else
++	if (start.y > p.y && upY > minY && isPathClear(start.x, upY)) {
++		moving = start.y - upY == yStep;
++		delta.y = start.y - upY;
++		newpos.y = upY;
 +		dirFrame = 0;
- 	}
- 
--	if (s._startFoot.x < p.x && (s._startFoot.x + xStep) < maxX && isPathClear(s._startFoot.x + xStep, s._startFoot.y)) {
--		if (s._startFoot.x + xStep <= p.x) {
--			s._stillWalkingTowardsNode = true;
-+	if (start.x < p.x && (start.x + xStep) < maxX && isPathClear(start.x + xStep, start.y)) {
-+		if (start.x + xStep <= p.x) {
++	}
++
++	const int rightX = MIN<int>(start.x + xStep, p.x), leftX = MAX<int>(start.x - xStep, p.x);
++	if (start.x < p.x && rightX < maxX && isPathClear(rightX, start.y)) {
++		if (rightX - start.x == xStep)
 +			moving = true;
- 			delta.x = xStep;
--			newpos.x = xStep + s._startFoot.x;
-+			newpos.x = xStep + start.x;
- 		} else {
--			delta.x = p.x - s._startFoot.x;
-+			delta.x = p.x - start.x;
- 			newpos.x = p.x;
- 		}
- 		if (delta.y < delta.x) {
--			s._dirFrame = 18;	// right
++		delta.x = rightX - start.x;
++		newpos.x = rightX;
++		if (delta.y < delta.x) {
 +			dirFrame = 18;	// right
- 		}
- 	} else
--	if (s._startFoot.x > p.x && (s._startFoot.x - xStep) > minX && isPathClear(s._startFoot.x - xStep, s._startFoot.y)) {
--		if (s._startFoot.x - xStep >= p.x) {
--			s._stillWalkingTowardsNode = true;
-+	if (start.x > p.x && (start.x - xStep) > minX && isPathClear(start.x - xStep, start.y)) {
-+		if (start.x - xStep >= p.x) {
++		}
++	} else
++	if (start.x > p.x && leftX > minX && isPathClear(leftX, start.y)) {
++		if (start.x - leftX == xStep)
 +			moving = true;
- 			delta.x = xStep;
--			newpos.x = s._startFoot.x - xStep;
-+			newpos.x = start.x - xStep;
- 		} else {
--			delta.x = s._startFoot.x - p.x;
-+			delta.x = start.x - p.x;
- 			newpos.x = p.x;
- 		}
- 		if (delta.y < delta.x) {
--			s._dirFrame = 27;	// left
++		delta.x = start.x - leftX;
++		newpos.x = leftX;
++		if (delta.y < delta.x) {
 +			dirFrame = 27;	// left
- 		}
- 	}
- 
--	debugC(9, kDebugWalk, "foot (%i, %i) dest (%i, %i) deltas = %i/%i ", s._startFoot.x, s._startFoot.y, p.x, p.y, delta.x, delta.y);
++		}
++	}
++
 +	debugC(9, kDebugWalk, "foot (%i, %i) dest (%i, %i) deltas = %i/%i ", start.x, start.y, p.x, p.y, delta.x, delta.y);
 +	return moving;
 +}
@@ -14716,47 +14695,119 @@ index b603efb7..33677b66 100644
 +	return stepTowards(start, *node, foot, dirFrame);
 +}
 +
-+void PathWalker_BR::doWalk(State &s) {
-+	if (!s._active) {
-+		return;
-+	}
-+
-+	if (s._walkDelay > 0) {
-+		s._walkDelay--;
-+		if (s._walkDelay == 0 && !s._a->_scriptName.empty()) {
-+			// stop script and reset
-+			s._a->_flags &= ~kFlagsActing;
-+//			_vm->_programExec->resetProgram(s._a->_scriptName);
-+		}
-+		return;
-+	}
-+
-+	if (!s._stillWalkingTowardsNode) {
-+		if (!s._walkPath.empty())
-+			s._walkPath.erase(s._walkPath.begin());
-+
-+		if (s._walkPath.empty()) {
-+			finalizeWalk(s);
-+			debugC(3, kDebugWalk, "PathWalker_BR::doWalk, walk completed (no more nodes)");
-+			return;
-+		} else {
-+			debugC(3, kDebugWalk, "PathWalker_BR::doWalk, reached a walkpath node, %i left", s._walkPath.size());
-+		}
-+	}
-+
-+	s._a->getFoot(s._startFoot);
-+
-+	s._step++;
-+	s._step %= 8;
-+	int walkFrame = s._step;
-+
-+	assert (!s._walkPath.empty());
+ void PathWalker_BR::doWalk(State &s) {
+ 	if (!s._active) {
+ 		return;
+@@ -607,93 +903,20 @@ void PathWalker_BR::doWalk(State &s) {
+ 
+ 	s._a->getFoot(s._startFoot);
+ 
+-	uint scale = _vm->_location.getScale(s._startFoot.y);
+-	int xStep = (scale * 16) / 100 + 1;
+-	int yStep = (scale * 10) / 100 + 1;
+-
+-	/* WORKAROUND: in the balloon scene, the position of the balloon (which is implemented as a
+-	Character) is controlled by the user (for movement, via this walking code) and by the scripts
+-	(to simulate the balloon floating in the air, in a neverending loop that alters the position
+-	coordinates).
+-	When the two step sizes are equal in magnitude and opposite in direction, then the walk code
+-	enters an infinite loop without giving control back to the user (this happens quite frequently
+-	when navigating the balloon near the borders of the screen, where the calculated step is
+-	forcibly small because of clipping). Since the "floating" script (part1/scripts/mongolo.scr)
+-	uses increments of 3 for both x and y, we tweak the calculated steps accordingly here. */
+-	if (xStep == 3) xStep--;
+-	if (yStep == 3) yStep--;
+-
+-	debugC(9, kDebugWalk, "calculated step: (%i, %i)", xStep, yStep);
+-
+-	s._stillWalkingTowardsNode = false;
+ 	s._step++;
+ 	s._step %= 8;
+-
+-	int maxX = _vm->_gfx->_backgroundInfo->width;
+-	int minX = 0;
+-	int maxY = _vm->_gfx->_backgroundInfo->height;
+-	int minY = 0;
+-
+ 	int walkFrame = s._step;
+-	s._dirFrame = 0;
+-	Common::Point newpos(s._startFoot), delta;
+ 
+ 	assert (!s._walkPath.empty());
+-	Common::Point p(*s._walkPath.begin());
+-
+-	if (s._startFoot.y < p.y && (s._startFoot.y + yStep) < maxY && isPathClear(s._startFoot.x, s._startFoot.y + yStep)) {
+-		if (yStep + s._startFoot.y <= p.y) {
+-			s._stillWalkingTowardsNode = true;
+-			delta.y = yStep;
+-			newpos.y = yStep + s._startFoot.y;
+-		} else {
+-			delta.y = p.y - s._startFoot.y;
+-			newpos.y = p.y;
+-		}
+-		s._dirFrame = 9;
+-	} else
+-	if (s._startFoot.y > p.y && (s._startFoot.y - yStep) > minY && isPathClear(s._startFoot.x, s._startFoot.y - yStep)) {
+-		if (s._startFoot.y - yStep >= p.y) {
+-			s._stillWalkingTowardsNode = true;
+-			delta.y = yStep;
+-			newpos.y = s._startFoot.y - yStep;
+-		} else {
+-			delta.y = s._startFoot.y - p.y;
+-			newpos.y = p.y;
+-		}
+-		s._dirFrame = 0;
+-	}
+-
+-	if (s._startFoot.x < p.x && (s._startFoot.x + xStep) < maxX && isPathClear(s._startFoot.x + xStep, s._startFoot.y)) {
+-		if (s._startFoot.x + xStep <= p.x) {
+-			s._stillWalkingTowardsNode = true;
+-			delta.x = xStep;
+-			newpos.x = xStep + s._startFoot.x;
+-		} else {
+-			delta.x = p.x - s._startFoot.x;
+-			newpos.x = p.x;
+-		}
+-		if (delta.y < delta.x) {
+-			s._dirFrame = 18;	// right
+-		}
+-	} else
+-	if (s._startFoot.x > p.x && (s._startFoot.x - xStep) > minX && isPathClear(s._startFoot.x - xStep, s._startFoot.y)) {
+-		if (s._startFoot.x - xStep >= p.x) {
+-			s._stillWalkingTowardsNode = true;
+-			delta.x = xStep;
+-			newpos.x = s._startFoot.x - xStep;
+-		} else {
+-			delta.x = s._startFoot.x - p.x;
+-			newpos.x = p.x;
+-		}
+-		if (delta.y < delta.x) {
+-			s._dirFrame = 27;	// left
+-		}
+-	}
 +	Common::Point newpos;
 +	s._stillWalkingTowardsNode = stepTowards(s._startFoot, *s._walkPath.begin(), newpos, s._dirFrame);
-+
  
- 	if (s._stillWalkingTowardsNode) {
+-	debugC(9, kDebugWalk, "foot (%i, %i) dest (%i, %i) deltas = %i/%i ", s._startFoot.x, s._startFoot.y, p.x, p.y, delta.x, delta.y);
+ 
+-	if (s._stillWalkingTowardsNode) {
++	// stepTowards gives the last, shorter step towards the node in newpos without "moving": it was never
++	// taken, and a character stopped up to a step away from where it was sent (a narrow door at the
++	// edge of the background could not be reached). Take it, then the node is done.
++	const bool lastStep = !s._stillWalkingTowardsNode && newpos != s._startFoot;
++	if (s._stillWalkingTowardsNode || lastStep) {
  		debugC(9, kDebugWalk, "PathWalker_BR::doWalk, foot moved from (%i, %i) to (%i, %i)", s._startFoot.x, s._startFoot.y, newpos.x, newpos.y);
+ 		s._a->setF(walkFrame + s._dirFrame + 1);
+ 		s._startFoot.x = newpos.x;
+@@ -702,7 +925,7 @@ void PathWalker_BR::doWalk(State &s) {
+ 		s._a->setZ(newpos.y);
+ 	}
+ 
+-	if (s._stillWalkingTowardsNode || !s._walkPath.empty()) {
++	if (s._stillWalkingTowardsNode || lastStep || !s._walkPath.empty()) {
+ 		Common::Point p2;
+ 		s._a->getFoot(p2);
+ 		checkTrap(p2);
 diff --git a/engines/parallaction/walk.h b/engines/parallaction/walk.h
 index 137c9be7..e7f74b2c 100644
 --- a/engines/parallaction/walk.h
@@ -15005,3 +15056,124 @@ index bca81a0b..86a62290 100644
  	/** Draw only the dialog's widgets */
  	void drawWidgets();
  
+diff --git a/gui/saveload-dialog.cpp b/gui/saveload-dialog.cpp
+index abfe10e1..f11d6666 100644
+--- a/gui/saveload-dialog.cpp
++++ b/gui/saveload-dialog.cpp
+@@ -41,6 +41,14 @@
+ 
+ namespace GUI {
+ 
++// BRA remaster: the grid of thumbnails also on phones, where the GUI is scaled up and smaller than 640x400
++// (the compact layout, about 530x240 on a phone held sideways at the 150% scale of the app): a row of
++// thumbnails needs about 230 points of height above the buttons, lower screens keep the list
++static bool gridFits() {
++	return g_gui.getGUIWidth() >= 360 && g_gui.getGUIHeight() >= 230;
++}
++
++
+ #define SCALEVALUE(val) ((val) * g_gui.getScaleFactor())
+ 
+ #ifdef USE_CLOUD
+@@ -151,7 +159,7 @@ SaveLoadChooserType getRequestedSaveLoadDialog(const MetaEngine *metaEngine) {
+ 	// possible to use it.
+ 	g_gui.checkScreenChange();
+ 
+-	if (g_gui.getGUIWidth() >= 640 && g_gui.getGUIHeight() >= 400
++	if (gridFits()
+ 		&& metaEngine->hasFeature(MetaEngine::kSavesSupportMetaInfo)
+ 		&& metaEngine->hasFeature(MetaEngine::kSavesSupportThumbnail)
+ 		&& userConfig.equalsIgnoreCase("grid")) {
+@@ -380,7 +388,7 @@ void SaveLoadChooserDialog::addChooserButtons() {
+ 
+ 	_listButton = createSwitchButton("SaveLoadChooser.ListSwitch", Common::U32String("L"), _("List view"), ThemeEngine::kImageList, kListSwitchCmd);
+ 	_gridButton = createSwitchButton("SaveLoadChooser.GridSwitch", Common::U32String("G"), _("Grid view"), ThemeEngine::kImageGrid, kGridSwitchCmd);
+-	if (!_metaInfoSupport || !_thumbnailSupport || !(g_gui.getGUIWidth() >= 640 && g_gui.getGUIHeight() >= 400)) {
++	if (!_metaInfoSupport || !_thumbnailSupport || !gridFits()) {
+ 		_gridButton->setEnabled(false);
+ 		_listButton->setEnabled(false);
+ 	}
+@@ -995,13 +1003,14 @@ void SaveLoadChooserGrid::reflowLayout() {
+ 
+ 	// HACK: The whole code below really works around the fact, that we have
+ 	// no easy way to dynamically layout widgets.
+-	const uint16 availableWidth = getWidth() - 20;
+ 	int16 availableHeight;
+ 
+ 	int16 x, y;
+ 	int16 w;
+ 	if (!g_gui.xmlEval()->getWidgetData("SaveLoadChooser.List", x, y, w, availableHeight))
+ 		error("Could not load widget position for 'SaveLoadChooser.List'");
++	// BRA remaster: the width of the list area, not of the dialog (the last column went past the right border)
++	const uint16 availableWidth = w;
+ 
+ 	const int16 buttonWidth = SCALEVALUE(kThumbnailWidth + 6);
+ 	const int16 buttonHeight = SCALEVALUE(kThumbnailHeight2 + 6);
+@@ -1009,7 +1018,7 @@ void SaveLoadChooserGrid::reflowLayout() {
+ 	const int16 containerFrameWidthAdd = SCALEVALUE(10);
+ 	const int16 containerFrameHeightAdd = 0;
+ 	const int16 containerWidth = buttonWidth + containerFrameWidthAdd;
+-	const int16 containerHeight = buttonHeight + kLineHeight + containerFrameHeightAdd;
++	const int16 containerHeight = buttonHeight + 2 * kLineHeight + containerFrameHeightAdd;
+ 
+ 	const int16 defaultSpacingHorizontal = SCALEVALUE(4);
+ 	const int16 defaultSpacingVertical = SCALEVALUE(8);
+@@ -1072,8 +1081,11 @@ void SaveLoadChooserGrid::reflowLayout() {
+ 			dstY += buttonHeight;
+ 
+ 			StaticTextWidget *description = new StaticTextWidget(container, dstX, dstY, buttonWidth, kLineHeight, Common::String(), Graphics::kTextAlignStart);
++			dstY += kLineHeight;
++
++			StaticTextWidget *date = new StaticTextWidget(container, dstX, dstY, buttonWidth, kLineHeight, Common::String(), Graphics::kTextAlignStart);
+ 
+-			_buttons.push_back(SlotButton(container, button, description));
++			_buttons.push_back(SlotButton(container, button, description, date));
+ 		}
+ 	}
+ 
+@@ -1185,12 +1197,17 @@ void SaveLoadChooserGrid::updateSaves() {
+ 		Common::U32String tooltip(_("Name: "));
+ 		tooltip += _saveList[i].getDescription().decode();
+ 
++		Common::U32String when;
+ 		if (_saveDateSupport) {
+ 			const Common::U32String &saveDate = desc.getSaveDate();
+ 			if (!saveDate.empty()) {
+ 				tooltip += Common::U32String("\n");
+ 				tooltip +=  _("Date: ") + saveDate;
++				when = saveDate;
+ 			}
++			const Common::U32String when2(desc.getSaveTime());
++			if (!when2.empty())
++				when += (when.empty() ? Common::U32String() : Common::U32String("  ")) + when2;
+ 
+ 			const Common::U32String &saveTime = desc.getSaveTime();
+ 			if (!saveTime.empty()) {
+@@ -1208,6 +1225,7 @@ void SaveLoadChooserGrid::updateSaves() {
+ 		}
+ 
+ 		curButton.button->setTooltip(tooltip);
++		curButton.date->setLabel(when);
+ 
+ 		// In save mode we disable the button, when it's write protected.
+ 		// TODO: Maybe we should not display it at all then?
+diff --git a/gui/saveload-dialog.h b/gui/saveload-dialog.h
+index db70a435..710dd98b 100644
+--- a/gui/saveload-dialog.h
++++ b/gui/saveload-dialog.h
+@@ -240,12 +240,13 @@ private:
+ 	bool selectDescription();
+ 
+ 	struct SlotButton {
+-		SlotButton() : container(nullptr), button(nullptr), description(nullptr) {}
+-		SlotButton(ContainerWidget *c, PicButtonWidget *b, StaticTextWidget *d) : container(c), button(b), description(d) {}
++		SlotButton() : container(nullptr), button(nullptr), description(nullptr), date(nullptr) {}
++		SlotButton(ContainerWidget *c, PicButtonWidget *b, StaticTextWidget *d, StaticTextWidget *t) : container(c), button(b), description(d), date(t) {}
+ 
+ 		ContainerWidget  *container;
+ 		PicButtonWidget  *button;
+ 		StaticTextWidget *description;
++		StaticTextWidget *date;		// BRA remaster: date and time under the name (no hover on phones)
+ 
+ 		void setVisible(bool state) {
+ 			container->setVisible(state);
