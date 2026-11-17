@@ -1,7 +1,7 @@
 # scummvm-bra-engine
 
-Modifiche al motore [ScummVM](https://github.com/scummvm/scummvm) (motore *parallaction*) usate dal remaster amatoriale
-di *The Big Red Adventure* firmato Marketto: grafica HD e 16:9, testi HD, voci, aiuti, manuale, salvataggi e altro.
+Modifiche al motore [ScummVM](https://github.com/scummvm/scummvm) (motore *parallaction*) per un progetto
+amatoriale e non ufficiale su *The Big Red Adventure*, firmato Marketto: grafica HD e 16:9, testi HD, voci, aiuti, manuale, salvataggi e altro.
 
 Questo repository contiene **solo il codice del motore**, sotto licenza GPL v3 come ScummVM (vedi `COPYING`).
 Non contiene file del gioco né contenuti derivati: per giocare serve una copia originale del gioco.
