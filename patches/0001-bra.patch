@@ -14357,7 +14357,7 @@ index d9d78eb5..32309c57 100644
  	void clearSet(OpcodeSet &opcodes) {
  		for (Common::Array<const Opcode *>::iterator i = opcodes.begin(); i != opcodes.end(); ++i)
 diff --git a/engines/parallaction/parser_br.cpp b/engines/parallaction/parser_br.cpp
-index ab0ebe31..29f7fd22 100644
+index ab0ebe31..81c9dbf2 100644
 --- a/engines/parallaction/parser_br.cpp
 +++ b/engines/parallaction/parser_br.cpp
 @@ -325,7 +325,9 @@ DECLARE_LOCATION_PARSER(location)  {
@@ -14387,7 +14387,25 @@ index ab0ebe31..29f7fd22 100644
  	_vm->restoreOrSaveZoneFlags(ctxt.a, _vm->getLocationFlags() & kFlagsVisited);
  }
  
-@@ -446,10 +457,19 @@ DECLARE_LOCATION_PARSER(ifchar)  {
+@@ -437,7 +448,16 @@ DECLARE_LOCATION_PARSER(redundant)  {
+ 
+ DECLARE_LOCATION_PARSER(character)  {
+ 	debugC(7, kDebugParser, "LOCATION_PARSER(character) ");
+-	_out->_characterName = _tokens[1];
++
++	// As in the original (Readinfo_ calls loadcharacter_ while reading the file): only on the first
++	// visit, and at once, so that the IFCHAR blocks below see the new character. Applied after the
++	// whole file on every visit, it undid a SWAP (part 4: "SWAP DINO" in paese, then the cemetery and
++	// back: "CHARACTER DOUG" made Doug the character again after the IFCHAR DINO block had declared
++	// Doug as the companion; two Dougs on screen and no Dino)
++	if ((_vm->getLocationFlags() & kFlagsVisited) == 0) {
++		_vm->changeCharacter(_tokens[1]);
++		_out->_characterName = _tokens[1];
++	}
+ }
+ 
+ 
+@@ -446,10 +466,19 @@ DECLARE_LOCATION_PARSER(ifchar)  {
  
  	if (scumm_stricmp(_vm->_char.getName(), _tokens[1])) {
  		_script->skip("ENDIF");
@@ -14407,7 +14425,7 @@ index ab0ebe31..29f7fd22 100644
  DECLARE_LOCATION_PARSER(null)  {
  	debugC(7, kDebugParser, "LOCATION_PARSER(null) ");
  
-@@ -764,7 +784,13 @@ void LocationParser_br::parseGetData(ZonePtr z) {
+@@ -764,7 +793,13 @@ void LocationParser_br::parseGetData(ZonePtr z) {
  		obj->frame = 0;
  		obj->x = z->getX();
  		obj->y = z->getY();
@@ -14422,7 +14440,7 @@ index ab0ebe31..29f7fd22 100644
  		data->_gfxobj = obj;
  	} else
  	if (!scumm_stricmp(_tokens[0], "mask")) {
-@@ -830,6 +856,28 @@ void LocationParser_br::parseNoneData(ZonePtr z) {
+@@ -830,6 +865,28 @@ void LocationParser_br::parseNoneData(ZonePtr z) {
  	*/
  	if (!scumm_stricmp(_tokens[0], "commands")) {
  		parseCommands(z->_commands);
@@ -14451,7 +14469,7 @@ index ab0ebe31..29f7fd22 100644
  	}
  }
  
-@@ -879,6 +927,8 @@ DECLARE_ANIM_PARSER(position)  {
+@@ -879,6 +936,8 @@ DECLARE_ANIM_PARSER(position)  {
  	ctxt.a->setX(atoi(_tokens[1]));
  	ctxt.a->setY(atoi(_tokens[2]));
  	ctxt.a->setZ(atoi(_tokens[3]));
@@ -14460,7 +14478,7 @@ index ab0ebe31..29f7fd22 100644
  	ctxt.a->setF(atoi(_tokens[4]));
  }
  
-@@ -959,6 +1009,10 @@ DECLARE_INSTRUCTION_PARSER(zone)  {
+@@ -959,6 +1018,10 @@ DECLARE_INSTRUCTION_PARSER(zone)  {
  	debugC(7, kDebugParser, "INSTRUCTION_PARSER(zone) ");
  
  	ctxt.inst->_z = _vm->_location.findZone(_tokens[1]);
@@ -14471,7 +14489,7 @@ index ab0ebe31..29f7fd22 100644
  	ctxt.inst->_index = _parser->_lookup;
  }
  
-@@ -1112,6 +1166,8 @@ void ProgramParser_br::parseRValue(ScriptVar &v, const char *str) {
+@@ -1112,6 +1175,8 @@ void ProgramParser_br::parseRValue(ScriptVar &v, const char *str) {
  		warning("Lip sync instruction encountered! Please notify the team");
  	}
  
@@ -14480,7 +14498,7 @@ index ab0ebe31..29f7fd22 100644
  }
  
  void ProgramParser_br::parse(Script *script, ProgramPtr program) {
-@@ -1186,7 +1242,7 @@ void LocationParser_br::init() {
+@@ -1186,7 +1251,7 @@ void LocationParser_br::init() {
  	LOCATION_PARSER(character);
  	LOCATION_PARSER(endlocation);
  	LOCATION_PARSER(ifchar);
@@ -14489,7 +14507,7 @@ index ab0ebe31..29f7fd22 100644
  	LOCATION_PARSER(location);
  	LOCATION_PARSER(mask);
  	LOCATION_PARSER(path);
-@@ -1277,6 +1333,7 @@ void LocationParser_br::parse(Script *script, LocationParserOutput_br *out) {
+@@ -1277,6 +1342,7 @@ void LocationParser_br::parse(Script *script, LocationParserOutput_br *out) {
  	_out = out;
  	_out->_info = new BackgroundInfo;
  	assert(_out->_info);
